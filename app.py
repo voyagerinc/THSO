@@ -14,6 +14,39 @@ from datetime import datetime
 st.set_page_config(page_title="Excel Template Exporter", layout="wide")
 
 # ============================================================================
+# AUTHENTICATION
+# ============================================================================
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "PaSSw0rd@1"
+
+def check_login():
+    """Check if user is logged in"""
+    return st.session_state.get('logged_in', False)
+
+def login_page():
+    """Display login form"""
+    st.title("🔐 Login Required")
+    st.markdown("Please login to access the Excel Template Exporter")
+    
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Login", type="primary")
+        
+        if submit:
+            if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+                st.session_state['logged_in'] = True
+                st.success("Login successful!")
+                st.rerun()
+            else:
+                st.error("Invalid username or password")
+
+# Check authentication
+if not check_login():
+    login_page()
+    st.stop()
+
+# ============================================================================
 # TEMPLATE MANAGEMENT
 # ============================================================================
 TEMPLATES_FILE = "templates.json"
@@ -163,6 +196,13 @@ def generate_excel_bytes(df_raw, specific_template_name=None):
 
 st.title("📊 Multi-Template Excel Exporter")
 st.markdown("Upload your raw Excel file, design custom templates with filters, and export perfectly formatted multi-sheet Excel files.")
+
+# Logout button
+col_logout1, col_logout2 = st.columns([6, 1])
+with col_logout2:
+    if st.button("🚪 Logout"):
+        st.session_state['logged_in'] = False
+        st.rerun()
 
 # 1. File Upload
 uploaded_file = st.file_uploader("Upload Raw Excel File", type=["xlsx", "xls"])
