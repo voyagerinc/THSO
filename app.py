@@ -70,21 +70,26 @@ def convert_to_master_file(df_raw):
     if date_col:
         df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
     
-    # Check if required columns exist
-    if 'Item Name' not in df.columns:
-        st.warning("Column 'Item Name' not found. Skipping Master File conversion.")
+    # Determine grouping column (Item Code is more reliable than Item Name)
+    group_col = None
+    if 'Item Code' in df.columns:
+        group_col = 'Item Code'
+    elif 'Item Name' in df.columns:
+        group_col = 'Item Name'
+    else:
+        st.warning("Neither 'Item Code' nor 'Item Name' found. Skipping Master File conversion.")
         return df
     
-    # Sort by Item Name and Date
-    sort_cols = ['Item Name']
+    # Sort by grouping column and Date
+    sort_cols = [group_col]
     if date_col:
         sort_cols.append(date_col)
     df = df.sort_values(sort_cols, ascending=[True, True])
     
-    # Group by Item Name and calculate running stock
+    # Group by Item Code/Name and calculate running stock
     result_rows = []
     
-    for item_name, group in df.groupby('Item Name', sort=False):
+    for item_key, group in df.groupby(group_col, sort=False):
         # Get the original stock quantity (from first row of each item)
         original_stock = 0
         if 'Stock Quantity' in group.columns:
@@ -96,11 +101,14 @@ def convert_to_master_file(df_raw):
         remaining_stock = original_stock
         
         for idx, row in group.iterrows():
+            # Use Pending Qty for allocation (not Order Qty!)
+            # Pending Qty = what still needs to be fulfilled
             order_qty = 0
-            if 'Order Qty' in row.index:
-                order_qty = float(row['Order Qty']) if pd.notna(row['Order Qty']) else 0
-            elif 'Pending Qty' in row.index:
+            if 'Pending Qty' in row.index:
                 order_qty = float(row['Pending Qty']) if pd.notna(row['Pending Qty']) else 0
+            elif 'Order Qty' in row.index:
+                # Fallback to Order Qty if Pending Qty doesn't exist
+                order_qty = float(row['Order Qty']) if pd.notna(row['Order Qty']) else 0
             
             # Calculate available stock for this order
             available_for_order = min(remaining_stock, order_qty) if remaining_stock > 0 else 0
@@ -398,15 +406,18 @@ if uploaded_file is not None:
             with col_sum1:
                 st.metric("Total Rows", len(df_raw))
             with col_sum2:
-                if 'Item Name' in df_raw.columns:
-                    st.metric("Unique Items", df_raw['Item Name'].nunique())
+                # Show unique items based on grouping column used
+                group_col = 'Item Code' if 'Item Code' in df_raw.columns else 'Item Name'
+                if group_col in df_raw.columns:
+                    st.metric(f"Unique {group_col}s", df_raw[group_col].nunique())
             with col_sum3:
                 if 'Stock Quantity' in df_raw.columns:
                     st.metric("Total Allocated Stock", f"{df_raw['Stock Quantity'].sum():.0f}")
             
             st.markdown("**Master File Logic Applied:**")
-            st.markdown("""
-            - Items sorted by **Order Date** (earliest first)
+            st.markdown(f"""
+            - Items grouped by **{group_col}** (more reliable)
+            - Sorted by **Order Date** (earliest first within each item)
             - **Stock Quantity** recalculated based on chronological allocation
             - Each order shows **available stock** after previous orders
             """)
