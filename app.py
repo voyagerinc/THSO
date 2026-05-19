@@ -47,6 +47,89 @@ if not check_login():
     st.stop()
 
 # ============================================================================
+# MASTER FILE PROCESSING
+# ============================================================================
+def convert_to_master_file(df_raw):
+    """
+    Convert raw file to Master file with stock allocation logic.
+    
+    For items with same Item Name:
+    - Sort by order date (SO Date)
+    - Calculate running stock allocation
+    - Update Stock Quantity to show available stock for each order
+    """
+    df = df_raw.copy()
+    
+    # Ensure date column is datetime
+    date_col = None
+    for col in ['SO Date', 'Order Date', 'Date']:
+        if col in df.columns:
+            date_col = col
+            break
+    
+    if date_col:
+        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+    
+    # Check if required columns exist
+    if 'Item Name' not in df.columns:
+        st.warning("Column 'Item Name' not found. Skipping Master File conversion.")
+        return df
+    
+    # Sort by Item Name and Date
+    sort_cols = ['Item Name']
+    if date_col:
+        sort_cols.append(date_col)
+    df = df.sort_values(sort_cols, ascending=[True, True])
+    
+    # Group by Item Name and calculate running stock
+    result_rows = []
+    
+    for item_name, group in df.groupby('Item Name', sort=False):
+        # Get the original stock quantity (from first row of each item)
+        original_stock = 0
+        if 'Stock Quantity' in group.columns:
+            # Find the first non-null, non-zero stock value
+            stock_values = group['Stock Quantity'].dropna()
+            if len(stock_values) > 0:
+                original_stock = float(stock_values.iloc[0])
+        
+        remaining_stock = original_stock
+        
+        for idx, row in group.iterrows():
+            order_qty = 0
+            if 'Order Qty' in row.index:
+                order_qty = float(row['Order Qty']) if pd.notna(row['Order Qty']) else 0
+            elif 'Pending Qty' in row.index:
+                order_qty = float(row['Pending Qty']) if pd.notna(row['Pending Qty']) else 0
+            
+            # Calculate available stock for this order
+            available_for_order = min(remaining_stock, order_qty) if remaining_stock > 0 else 0
+            
+            # Update the row
+            row_copy = row.copy()
+            
+            # Update Stock Quantity to show allocated stock
+            if 'Stock Quantity' in row_copy.index:
+                row_copy['Stock Quantity'] = available_for_order
+            
+            # Add tracking columns (optional - can be hidden in export)
+            row_copy['Original Stock'] = original_stock
+            row_copy['Allocated Stock'] = available_for_order
+            row_copy['Stock After Order'] = max(0, remaining_stock - order_qty)
+            
+            result_rows.append(row_copy)
+            
+            # Deduct from remaining stock
+            remaining_stock = max(0, remaining_stock - order_qty)
+    
+    df_master = pd.DataFrame(result_rows)
+    
+    # Reset index
+    df_master = df_master.reset_index(drop=True)
+    
+    return df_master
+
+# ============================================================================
 # TEMPLATE MANAGEMENT
 # ============================================================================
 TEMPLATES_FILE = "templates.json"
@@ -67,8 +150,8 @@ def save_templates(templates):
 if 'templates' not in st.session_state:
     st.session_state['templates'] = load_templates()
 
-if 'active_filters' not in st.session_state:
-    st.session_state['active_filters'] = []
+if 'filter_groups' not in st.session_state:
+    st.session_state['filter_groups'] = []
 
 # ============================================================================
 # STYLING CONFIGURATION
@@ -78,50 +161,109 @@ HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
 BORDER = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
 
 # ============================================================================
-# FILTER & EXPORT LOGIC
+# FILTER & EXPORT LOGIC - ENHANCED WITH AND/OR SUPPORT
 # ============================================================================
+def apply_single_filter(df, col, op, val):
+    """Apply a single filter condition to dataframe"""
+    if col not in df.columns:
+        return df
+    
+    try:
+        num_val = float(val)
+        is_num = True
+    except ValueError:
+        num_val = val
+        is_num = False
+    
+    if op == "==":
+        if is_num:
+            mask = df[col] == num_val
+        else:
+            search_val = str(val).strip().lower()
+            mask = df[col].astype(str).str.strip().str.lower() == search_val
+    elif op == "!=":
+        if is_num:
+            mask = df[col] != num_val
+        else:
+            search_val = str(val).strip().lower()
+            mask = df[col].astype(str).str.strip().str.lower() != search_val
+    elif op == ">" and is_num:
+        mask = pd.to_numeric(df[col], errors='coerce') > num_val
+    elif op == "<" and is_num:
+        mask = pd.to_numeric(df[col], errors='coerce') < num_val
+    elif op == ">=" and is_num:
+        mask = pd.to_numeric(df[col], errors='coerce') >= num_val
+    elif op == "<=" and is_num:
+        mask = pd.to_numeric(df[col], errors='coerce') <= num_val
+    elif op == "contains":
+        mask = df[col].astype(str).str.contains(str(val), case=False, na=False)
+    else:
+        mask = pd.Series([True] * len(df), index=df.index)
+    
+    return mask
+
 def get_filtered_dataframe(df_raw, config):
+    """Apply complex filters with AND/OR logic support"""
     df_filtered = df_raw.copy()
     
-    # 1. Apply filters
-    for f in config.get("filters", []):
-        if isinstance(f, dict) and "column" in f:
-            col = f["column"]
-            op = f["operator"]
-            val = f["value"]
+    # Handle new format (filter_groups with AND/OR logic)
+    filter_groups = config.get("filter_groups", [])
+    
+    # Backward compatibility: convert old "filters" format to new format
+    if not filter_groups and "filters" in config and config["filters"]:
+        filter_groups = [{
+            "conditions": config["filters"],
+            "logic": "AND"
+        }]
+    
+    if filter_groups:
+        # Apply filter groups
+        group_masks = []
+        
+        for group in filter_groups:
+            conditions = group.get("conditions", [])
+            group_logic = group.get("logic", "AND")
             
-            try:
-                num_val = float(val)
-                is_num = True
-            except ValueError:
-                num_val = val
-                is_num = False
-                
-            if col in df_filtered.columns:
-                if op == "==":
-                    if is_num:
-                        df_filtered = df_filtered[df_filtered[col] == num_val]
-                    else:
-                        search_val = str(val).strip().lower()
-                        df_filtered = df_filtered[df_filtered[col].astype(str).str.strip().str.lower() == search_val]
-                elif op == "!=":
-                    if is_num:
-                        df_filtered = df_filtered[df_filtered[col] != num_val]
-                    else:
-                        search_val = str(val).strip().lower()
-                        df_filtered = df_filtered[df_filtered[col].astype(str).str.strip().str.lower() != search_val]
-                elif op == ">" and is_num:
-                    df_filtered = df_filtered[pd.to_numeric(df_filtered[col], errors='coerce') > num_val]
-                elif op == "<" and is_num:
-                    df_filtered = df_filtered[pd.to_numeric(df_filtered[col], errors='coerce') < num_val]
-                elif op == ">=" and is_num:
-                    df_filtered = df_filtered[pd.to_numeric(df_filtered[col], errors='coerce') >= num_val]
-                elif op == "<=" and is_num:
-                    df_filtered = df_filtered[pd.to_numeric(df_filtered[col], errors='coerce') <= num_val]
-                elif op == "contains":
-                    df_filtered = df_filtered[df_filtered[col].astype(str).str.contains(str(val), case=False, na=False)]
-
-    # 2. Select columns
+            if not conditions:
+                continue
+            
+            # Apply all conditions in this group
+            condition_masks = []
+            for f in conditions:
+                if isinstance(f, dict) and "column" in f:
+                    mask = apply_single_filter(df_raw, f["column"], f["operator"], f["value"])
+                    condition_masks.append(mask)
+            
+            if not condition_masks:
+                continue
+            
+            # Combine conditions within the group using group logic
+            if group_logic == "OR":
+                group_mask = condition_masks[0]
+                for mask in condition_masks[1:]:
+                    group_mask = group_mask | mask
+            else:  # AND
+                group_mask = condition_masks[0]
+                for mask in condition_masks[1:]:
+                    group_mask = group_mask & mask
+            
+            group_masks.append(group_mask)
+        
+        # Combine all group masks with the groups_logic (default AND)
+        groups_logic = config.get("groups_logic", "AND")
+        if group_masks:
+            if groups_logic == "OR":
+                final_mask = group_masks[0]
+                for mask in group_masks[1:]:
+                    final_mask = final_mask | mask
+            else:  # AND
+                final_mask = group_masks[0]
+                for mask in group_masks[1:]:
+                    final_mask = final_mask & mask
+            
+            df_filtered = df_filtered[final_mask]
+    
+    # 2. Select columns (exclude tracking columns if not requested)
     available_cols = [c for c in config.get("columns", []) if c in df_filtered.columns]
     if available_cols:
         df_filtered = df_filtered[available_cols]
@@ -190,12 +332,45 @@ def generate_excel_bytes(df_raw, specific_template_name=None):
     output.seek(0)
     return output
 
+def format_filter_display(filter_groups, groups_logic="AND"):
+    """Create a human-readable display of filter logic"""
+    if not filter_groups:
+        return "No filters applied"
+    
+    parts = []
+    for idx, group in enumerate(filter_groups):
+        conditions = group.get("conditions", [])
+        group_logic = group.get("logic", "AND")
+        
+        if not conditions:
+            continue
+        
+        # Format conditions within group
+        cond_strs = []
+        for c in conditions:
+            cond_strs.append(f"`{c['column']}` {c['operator']} `{c['value']}`")
+        
+        # Join conditions with group logic
+        group_str = f" {group_logic} ".join(cond_strs)
+        
+        # Wrap in parentheses if more than one condition
+        if len(cond_strs) > 1:
+            group_str = f"({group_str})"
+        
+        parts.append(group_str)
+    
+    # Join groups with groups_logic
+    if len(parts) > 1:
+        return f" **{groups_logic}** ".join(parts)
+    else:
+        return parts[0] if parts else "No filters applied"
+
 # ============================================================================
 # UI LAYOUT
 # ============================================================================
 
-st.title("📊 Multi-Template Excel Exporter")
-st.markdown("Upload your raw Excel file, design custom templates with filters, and export perfectly formatted multi-sheet Excel files.")
+st.title("📊 Multi-Template Excel Exporter with Master File Processing")
+st.markdown("Upload your raw Excel file → **Auto-convert to Master File with stock allocation** → Design custom templates with **AND/OR filter logic** → Export perfectly formatted multi-sheet Excel files.")
 
 # Logout button
 col_logout1, col_logout2 = st.columns([6, 1])
@@ -209,11 +384,101 @@ uploaded_file = st.file_uploader("Upload Raw Excel File", type=["xlsx", "xls"])
 
 if uploaded_file is not None:
     try:
-        df_raw = pd.read_excel(uploaded_file)
-        st.success(f"Successfully loaded {len(df_raw)} rows and {len(df_raw.columns)} columns.")
+        df_raw_original = pd.read_excel(uploaded_file)
         
-        with st.expander("Raw Data Preview", expanded=False):
-            st.dataframe(df_raw.head(100), use_container_width=True)
+        # CONVERT TO MASTER FILE
+        with st.spinner("🔄 Converting to Master File (calculating stock allocation)..."):
+            df_raw = convert_to_master_file(df_raw_original)
+        
+        st.success(f"✅ Master File ready: {len(df_raw)} rows and {len(df_raw.columns)} columns.")
+        
+        # Show conversion summary
+        with st.expander("📋 Master File Conversion Summary", expanded=False):
+            col_sum1, col_sum2, col_sum3 = st.columns(3)
+            with col_sum1:
+                st.metric("Total Rows", len(df_raw))
+            with col_sum2:
+                if 'Item Name' in df_raw.columns:
+                    st.metric("Unique Items", df_raw['Item Name'].nunique())
+            with col_sum3:
+                if 'Stock Quantity' in df_raw.columns:
+                    st.metric("Total Allocated Stock", f"{df_raw['Stock Quantity'].sum():.0f}")
+            
+            st.markdown("**Master File Logic Applied:**")
+            st.markdown("""
+            - Items sorted by **Order Date** (earliest first)
+            - **Stock Quantity** recalculated based on chronological allocation
+            - Each order shows **available stock** after previous orders
+            """)
+        
+        with st.expander("📊 Master File Preview", expanded=False):
+            # Show relevant columns for preview
+            preview_cols = [c for c in df_raw.columns if c not in ['Original Stock', 'Stock After Order']]
+            st.dataframe(df_raw[preview_cols].head(100), use_container_width=True)
+        
+        # Download Master File button
+        st.markdown("### 📥 Download Master File")
+        col_download1, col_download2 = st.columns([2, 1])
+        with col_download1:
+            st.markdown("Download the processed Master File with stock allocation calculations.")
+        with col_download2:
+            # Generate Excel for Master File
+            master_wb = Workbook()
+            master_ws = master_wb.active
+            master_ws.title = "Master File"
+            
+            # Add headers
+            for col_num, col_name in enumerate(df_raw.columns, 1):
+                cell = master_ws.cell(row=1, column=col_num, value=col_name)
+                cell.font = HEADER_FONT
+                cell.fill = HEADER_FILL
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                cell.border = BORDER
+            
+            # Add data
+            for r_idx, row in enumerate(dataframe_to_rows(df_raw, index=False, header=False), 2):
+                for c_idx, value in enumerate(row, 1):
+                    cell = master_ws.cell(row=r_idx, column=c_idx, value=value)
+                    cell.border = BORDER
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+                    
+                    if isinstance(value, (int, float)) and not pd.isna(value):
+                        if '.' in str(value):
+                            cell.number_format = '0.00'
+                        else:
+                            cell.number_format = '0'
+            
+            # Auto-adjust column widths
+            for col in master_ws.columns:
+                max_length = 0
+                col_letter = col[0].column_letter
+                for cell in col:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                master_ws.column_dimensions[col_letter].width = min(max_length + 2, 30)
+            
+            # Add metadata
+            metadata_row = len(df_raw) + 3
+            master_ws[f'A{metadata_row}'] = f"Master File Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            master_ws[f'A{metadata_row}'].font = Font(italic=True, color="666666", size=9)
+            master_ws[f'A{metadata_row+1}'] = f"Total Records: {len(df_raw)}"
+            master_ws[f'A{metadata_row+1}'].font = Font(italic=True, color="666666", size=9)
+            
+            # Save to bytes
+            master_output = io.BytesIO()
+            master_wb.save(master_output)
+            master_output.seek(0)
+            
+            st.download_button(
+                label="⬇️ Download Master File",
+                data=master_output,
+                file_name=f"Master_File_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary"
+            )
             
     except Exception as e:
         st.error(f"Error reading file: {e}")
@@ -229,32 +494,94 @@ if uploaded_file is not None:
         st.subheader("🛠️ Template Designer")
         
         t_name = st.text_input("Template Name")
-        t_cols = st.multiselect("Select Columns to Include", options=df_raw.columns, default=list(df_raw.columns))
+        
+        # Exclude tracking columns from selection by default
+        selectable_cols = [c for c in df_raw.columns if c not in ['Original Stock', 'Allocated Stock', 'Stock After Order']]
+        t_cols = st.multiselect("Select Columns to Include", options=selectable_cols, default=selectable_cols)
         t_sort = st.selectbox("Sort By (Optional)", options=["None"] + list(df_raw.columns))
         
-        st.markdown("**Add Filters**")
+        st.markdown("---")
+        st.markdown("### 🔍 Advanced Filters (AND/OR Logic)")
+        
+        # Current filter groups display
+        if st.session_state['filter_groups']:
+            st.markdown("**Current Filter Logic:**")
+            groups_logic = st.radio(
+                "Combine filter groups with:",
+                options=["AND", "OR"],
+                horizontal=True,
+                key="groups_logic_radio"
+            )
+            
+            filter_display = format_filter_display(st.session_state['filter_groups'], groups_logic)
+            st.markdown(filter_display, unsafe_allow_html=True)
+            
+            if st.button("🗑️ Clear All Filters"):
+                st.session_state['filter_groups'] = []
+                st.rerun()
+        
+        st.markdown("---")
+        st.markdown("**Create Filter Group:**")
+        
+        # Initialize current group in session state
+        if 'current_group_conditions' not in st.session_state:
+            st.session_state['current_group_conditions'] = []
+        
+        # Add condition to current group
         f_col1, f_col2, f_col3 = st.columns([2, 1, 2])
         filter_col = f_col1.selectbox("Column", options=df_raw.columns, key="f_col")
         filter_op = f_col2.selectbox("Operator", options=["==", "!=", ">", "<", ">=", "<=", "contains"], key="f_op")
         filter_val = f_col3.text_input("Value", key="f_val")
         
-        if st.button("➕ Add Filter"):
-            if filter_val != "":
-                st.session_state['active_filters'].append({"column": filter_col, "operator": filter_op, "value": filter_val})
-                st.rerun()
-            else:
-                st.warning("Please enter a value for the filter.")
-                
-        if st.session_state['active_filters']:
-            st.markdown("Active Filters:")
-            for i, f in enumerate(st.session_state['active_filters']):
-                st.write(f"- `{f['column']} {f['operator']} '{f['value']}'`")
-            if st.button("Clear Filters"):
-                st.session_state['active_filters'] = []
-                st.rerun()
-                
+        col_add1, col_add2 = st.columns(2)
+        with col_add1:
+            if st.button("➕ Add to Group"):
+                if filter_val != "":
+                    st.session_state['current_group_conditions'].append({
+                        "column": filter_col,
+                        "operator": filter_op,
+                        "value": filter_val
+                    })
+                    st.rerun()
+                else:
+                    st.warning("Please enter a value for the filter.")
+        
+        # Display current group being built
+        if st.session_state['current_group_conditions']:
+            st.markdown("**Current Group Conditions:**")
+            for i, c in enumerate(st.session_state['current_group_conditions']):
+                col_disp1, col_disp2 = st.columns([4, 1])
+                with col_disp1:
+                    st.write(f"{i+1}. `{c['column']}` {c['operator']} `{c['value']}`")
+                with col_disp2:
+                    if st.button("❌", key=f"del_cond_{i}"):
+                        st.session_state['current_group_conditions'].pop(i)
+                        st.rerun()
+            
+            group_logic = st.radio(
+                "Combine conditions in this group with:",
+                options=["AND", "OR"],
+                horizontal=True,
+                key="group_logic_radio"
+            )
+            
+            col_save1, col_save2 = st.columns(2)
+            with col_save1:
+                if st.button("✅ Save Filter Group", type="primary"):
+                    st.session_state['filter_groups'].append({
+                        "conditions": st.session_state['current_group_conditions'].copy(),
+                        "logic": group_logic
+                    })
+                    st.session_state['current_group_conditions'] = []
+                    st.rerun()
+            with col_save2:
+                if st.button("🔄 Reset Group"):
+                    st.session_state['current_group_conditions'] = []
+                    st.rerun()
+        
+        st.markdown("---")
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("💾 Save Template", type="primary"):
+        if st.button("💾 Save Complete Template", type="primary"):
             if not t_name:
                 st.error("Template Name is required!")
             elif not t_cols:
@@ -263,14 +590,16 @@ if uploaded_file is not None:
                 config = {
                     "description": f"Custom template: {t_name}",
                     "columns": t_cols,
-                    "filters": st.session_state['active_filters'].copy(),
+                    "filter_groups": st.session_state['filter_groups'].copy(),
+                    "groups_logic": st.session_state.get('groups_logic_radio', 'AND'),
                     "sort_by": [t_sort] if t_sort != "None" else []
                 }
                 st.session_state['templates'][t_name] = config
                 save_templates(st.session_state['templates'])
                 
-                # Clear form state essentially
-                st.session_state['active_filters'] = []
+                # Clear form state
+                st.session_state['filter_groups'] = []
+                st.session_state['current_group_conditions'] = []
                 st.success(f"Template '{t_name}' saved successfully!")
                 st.rerun()
 
@@ -285,17 +614,29 @@ if uploaded_file is not None:
             
             if selected_t:
                 config = st.session_state['templates'][selected_t]
+                
+                # Display filter logic
+                if config.get("filter_groups"):
+                    st.markdown("**Filter Logic:**")
+                    filter_display = format_filter_display(
+                        config.get("filter_groups", []),
+                        config.get("groups_logic", "AND")
+                    )
+                    st.markdown(filter_display, unsafe_allow_html=True)
+                    st.markdown("---")
+                
                 filtered_df = get_filtered_dataframe(df_raw, config)
                 
                 st.write(f"**Rows Matched:** {len(filtered_df)}")
                 
-                if len(filtered_df) == 0 and config.get("filters"):
+                if len(filtered_df) == 0 and config.get("filter_groups"):
                     st.warning("Your filter matched 0 rows. Here is some sample data from the columns you filtered to help debug:")
-                    for f in config.get("filters", []):
-                        c = f.get("column")
-                        if c in df_raw.columns:
-                            uniq = df_raw[c].dropna().unique()
-                            st.write(f"- `{c}`: {', '.join([str(x) for x in uniq[:10]])}")
+                    for group in config.get("filter_groups", []):
+                        for f in group.get("conditions", []):
+                            c = f.get("column")
+                            if c in df_raw.columns:
+                                uniq = df_raw[c].dropna().unique()
+                                st.write(f"- `{c}`: {', '.join([str(x) for x in uniq[:10]])}")
                 
                 st.dataframe(filtered_df.head(50), use_container_width=True)
                 
