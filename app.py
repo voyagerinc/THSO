@@ -416,10 +416,11 @@ if uploaded_file is not None:
             
             st.markdown("**Master File Logic Applied:**")
             st.markdown(f"""
-            - Items grouped by **{group_col}** (more reliable)
-            - Sorted by **Order Date** (earliest first within each item)
-            - **Stock Quantity** recalculated based on chronological allocation
-            - Each order shows **available stock** after previous orders
+            - Items grouped by **{group_col}** (unique identifier)
+            - Sorted by **SO Date** (earliest first within each item)
+            - **Stock Quantity** calculated using **Pending Qty** (not Order Qty)
+            - Each order shows **available stock** for pending quantity after previous orders
+            - Logic: Allocates stock chronologically based on what still needs to be fulfilled
             """)
         
         with st.expander("📊 Master File Preview", expanded=False):
