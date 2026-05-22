@@ -60,6 +60,36 @@ def convert_to_master_file(df_raw):
     """
     df = df_raw.copy()
     
+    # ========================================================================
+    # FILTER OUT UNWANTED ROWS BEFORE PROCESSING
+    # ========================================================================
+    initial_count = len(df)
+    removed_party = 0
+    removed_line = 0
+    
+    # 1. Remove rows where "Party Order No" contains "from stock" (case-insensitive)
+    if 'Party Order No' in df.columns:
+        mask_party = df['Party Order No'].astype(str).str.lower().str.contains('from stock', na=False)
+        df = df[~mask_party]
+        removed_party = initial_count - len(df)
+        if removed_party > 0:
+            st.info(f"Filtered out {removed_party} row(s) with 'from stock' in Party Order No")
+    
+    # 2. Remove rows where "Line" column contains "trading" (case-insensitive)
+    if 'Line' in df.columns:
+        mask_line = df['Line'].astype(str).str.lower().str.contains('trading', na=False)
+        df = df[~mask_line]
+        removed_line = initial_count - removed_party - len(df)
+        if removed_line > 0:
+            st.info(f"Filtered out {removed_line} row(s) with 'trading' in Line column")
+    
+    final_count = len(df)
+    total_removed = initial_count - final_count
+    if total_removed > 0:
+        st.success(f"Total rows removed before master file creation: {total_removed} (Remaining: {final_count})")
+    
+    # ========================================================================
+    
     # Ensure date column is datetime
     date_col = None
     for col in ['SO Date', 'Order Date', 'Date']:
