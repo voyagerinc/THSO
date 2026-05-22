@@ -444,7 +444,7 @@ if uploaded_file is not None:
             # Initialize session state for master filters
             if 'master_filters' not in st.session_state:
                 st.session_state['master_filters'] = [
-                    {'column': 'Party Order No', 'contains': 'from stock', 'enabled': True},
+                    {'column': "Party's Order No.", 'contains': 'from stock', 'enabled': True},
                     {'column': 'Line', 'contains': 'trading', 'enabled': True}
                 ]
             
@@ -489,7 +489,7 @@ if uploaded_file is not None:
             with col_btn2:
                 if st.button("🔄 Reset to Defaults"):
                     st.session_state['master_filters'] = [
-                        {'column': 'Party Order No', 'contains': 'from stock', 'enabled': True},
+                        {'column': "Party's Order No.", 'contains': 'from stock', 'enabled': True},
                         {'column': 'Line', 'contains': 'trading', 'enabled': True}
                     ]
                     st.rerun()
