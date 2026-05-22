@@ -49,7 +49,7 @@ if not check_login():
 # ============================================================================
 # MASTER FILE PROCESSING
 # ============================================================================
-def convert_to_master_file(df_raw):
+def convert_to_master_file(df_raw, filters=None):
     """
     Convert raw file to Master file with stock allocation logic.
     
@@ -57,36 +57,45 @@ def convert_to_master_file(df_raw):
     - Sort by order date (SO Date)
     - Calculate running stock allocation
     - Update Stock Quantity to show available stock for each order
+    
+    Args:
+        df_raw: Raw DataFrame to process
+        filters: List of filter rules to apply before processing
+                Each filter: {'column': str, 'contains': str, 'enabled': bool}
     """
     df = df_raw.copy()
     
     # ========================================================================
     # FILTER OUT UNWANTED ROWS BEFORE PROCESSING
     # ========================================================================
-    initial_count = len(df)
-    removed_party = 0
-    removed_line = 0
-    
-    # 1. Remove rows where "Party Order No" contains "from stock" (case-insensitive)
-    if 'Party Order No' in df.columns:
-        mask_party = df['Party Order No'].astype(str).str.lower().str.contains('from stock', na=False)
-        df = df[~mask_party]
-        removed_party = initial_count - len(df)
-        if removed_party > 0:
-            st.info(f"Filtered out {removed_party} row(s) with 'from stock' in Party Order No")
-    
-    # 2. Remove rows where "Line" column contains "trading" (case-insensitive)
-    if 'Line' in df.columns:
-        mask_line = df['Line'].astype(str).str.lower().str.contains('trading', na=False)
-        df = df[~mask_line]
-        removed_line = initial_count - removed_party - len(df)
-        if removed_line > 0:
-            st.info(f"Filtered out {removed_line} row(s) with 'trading' in Line column")
-    
-    final_count = len(df)
-    total_removed = initial_count - final_count
-    if total_removed > 0:
-        st.success(f"Total rows removed before master file creation: {total_removed} (Remaining: {final_count})")
+    if filters:
+        initial_count = len(df)
+        total_removed = 0
+        
+        # Apply each enabled filter
+        for filter_rule in filters:
+            if not filter_rule.get('enabled', True):
+                continue
+            
+            column = filter_rule.get('column')
+            search_text = filter_rule.get('contains', '').strip()
+            
+            if not search_text or column not in df.columns:
+                continue
+            
+            # Apply filter (case-insensitive)
+            before_count = len(df)
+            mask = df[column].astype(str).str.lower().str.contains(search_text.lower(), na=False)
+            df = df[~mask]
+            removed = before_count - len(df)
+            
+            if removed > 0:
+                st.info(f"🔍 Filtered out {removed} row(s) where '{column}' contains '{search_text}'")
+                total_removed += removed
+        
+        if total_removed > 0:
+            final_count = len(df)
+            st.success(f"✅ Total rows removed: {total_removed} | Remaining: {final_count}")
     
     # ========================================================================
     
@@ -424,9 +433,82 @@ if uploaded_file is not None:
     try:
         df_raw_original = pd.read_excel(uploaded_file)
         
+        # ========================================================================
+        # MASTER FILE FILTER CONFIGURATION
+        # ========================================================================
+        st.divider()
+        st.subheader("🔍 Pre-Processing Filters (Optional)")
+        st.markdown("Configure filters to remove unwanted rows **before** creating the master file:")
+        
+        with st.expander("⚙️ Configure Filters", expanded=False):
+            # Initialize session state for master filters
+            if 'master_filters' not in st.session_state:
+                st.session_state['master_filters'] = [
+                    {'column': 'Party Order No', 'contains': 'from stock', 'enabled': True},
+                    {'column': 'Line', 'contains': 'trading', 'enabled': True}
+                ]
+            
+            # Display current filters
+            st.markdown("**Filter Rules:**")
+            
+            filters_to_remove = []
+            for i, filter_rule in enumerate(st.session_state['master_filters']):
+                col1, col2, col3, col4 = st.columns([1, 3, 3, 1])
+                
+                with col1:
+                    filter_rule['enabled'] = st.checkbox("✓", value=filter_rule['enabled'], key=f"filter_enable_{i}")
+                
+                with col2:
+                    available_cols = list(df_raw_original.columns)
+                    current_col = filter_rule['column'] if filter_rule['column'] in available_cols else available_cols[0]
+                    filter_rule['column'] = st.selectbox("Column", options=available_cols, index=available_cols.index(current_col), key=f"filter_col_{i}", label_visibility="collapsed")
+                
+                with col3:
+                    filter_rule['contains'] = st.text_input("Contains (case-insensitive)", value=filter_rule['contains'], key=f"filter_text_{i}", placeholder="e.g., from stock", label_visibility="collapsed")
+                
+                with col4:
+                    if st.button("🗑️", key=f"filter_del_{i}"):
+                        filters_to_remove.append(i)
+            
+            # Remove filters marked for deletion
+            for idx in reversed(filters_to_remove):
+                st.session_state['master_filters'].pop(idx)
+                st.rerun()
+            
+            # Action buttons
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                if st.button("➕ Add Filter Rule"):
+                    st.session_state['master_filters'].append({
+                        'column': list(df_raw_original.columns)[0],
+                        'contains': '',
+                        'enabled': True
+                    })
+                    st.rerun()
+            
+            with col_btn2:
+                if st.button("🔄 Reset to Defaults"):
+                    st.session_state['master_filters'] = [
+                        {'column': 'Party Order No', 'contains': 'from stock', 'enabled': True},
+                        {'column': 'Line', 'contains': 'trading', 'enabled': True}
+                    ]
+                    st.rerun()
+        
+        # Show summary of active filters
+        active_filters = [f for f in st.session_state['master_filters'] if f['enabled'] and f['contains'].strip()]
+        if active_filters:
+            st.info(f"✅ {len(active_filters)} filter rule(s) will be applied")
+            for f in active_filters:
+                st.markdown(f"- Remove rows where **{f['column']}** contains *'{f['contains']}'*")
+        else:
+            st.warning("⚠️ No filters active - all rows will be processed")
+        
+        st.divider()
+        # ========================================================================
+        
         # CONVERT TO MASTER FILE
         with st.spinner("🔄 Converting to Master File (calculating stock allocation)..."):
-            df_raw = convert_to_master_file(df_raw_original)
+            df_raw = convert_to_master_file(df_raw_original, st.session_state.get('master_filters', []))
         
         st.success(f"✅ Master File ready: {len(df_raw)} rows and {len(df_raw.columns)} columns.")
         
