@@ -67,13 +67,13 @@ def convert_to_master_file(df_raw):
     removed_party = 0
     removed_line = 0
     
-    # 1. Remove rows where "Party Order No" contains "from stock" (case-insensitive)
+    # 1. Remove rows where "Party Order No" contains "stock" in any format (case-insensitive)
     if 'Party Order No' in df.columns:
-        mask_party = df['Party Order No'].astype(str).str.lower().str.contains('from stock', na=False)
+        mask_party = df['Party Order No'].astype(str).str.lower().str.contains('stock', na=False)
         df = df[~mask_party]
         removed_party = initial_count - len(df)
         if removed_party > 0:
-            st.info(f"Filtered out {removed_party} row(s) with 'from stock' in Party Order No")
+            st.info(f"Filtered out {removed_party} row(s) with 'stock' in Party Order No")
     
     # 2. Remove rows where "Line" column contains "trading" (case-insensitive)
     if 'Line' in df.columns:
