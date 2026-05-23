@@ -1,3 +1,32 @@
+"""
+Excel Template Exporter with GitHub Sync
+
+This Streamlit application provides:
+1. Excel template creation and management
+2. Master file processing with stock allocation
+3. Advanced filtering with AND/OR logic
+4. GitHub integration for data synchronization
+5. Service restart capability
+
+GITHUB SYNC FEATURE:
+- Located in the upper left corner after login
+- Three buttons available:
+  * 📥 Pull from GitHub: Fetch latest changes from your repository
+  * 🔄 Restart Services: Reload configurations and restart the app
+  * 🚀 Pull & Restart: Combined action (recommended for updates)
+
+SETUP:
+1. Initialize git in your app directory: `git init`
+2. Add remote repository: `git remote add origin <your-repo-url>`
+3. Configure GITHUB_REPO_PATH in this file if needed
+4. Use the sync buttons to pull updates and restart
+
+WORKFLOW:
+- Upload data files to GitHub
+- Click "Pull & Restart" to sync and reload
+- All templates and configurations will be updated automatically
+"""
+
 import streamlit as st
 import pandas as pd
 from openpyxl import Workbook
@@ -7,11 +36,20 @@ import io
 import json
 import os
 from datetime import datetime
+import subprocess
+import time
 
 # ============================================================================
 # PAGE CONFIG
 # ============================================================================
 st.set_page_config(page_title="Excel Template Exporter", layout="wide")
+
+# ============================================================================
+# GITHUB CONFIGURATION
+# ============================================================================
+# Configure your GitHub repository path here
+# Use "." for current directory, or specify full path to your repo
+GITHUB_REPO_PATH = "."
 
 # ============================================================================
 # AUTHENTICATION
@@ -45,6 +83,184 @@ def login_page():
 if not check_login():
     login_page()
     st.stop()
+
+# ============================================================================
+# GITHUB PULL & SERVICE RESTART
+# ============================================================================
+def pull_from_github(repo_path=None):
+    """
+    Pull latest changes from GitHub repository
+    
+    Args:
+        repo_path: Path to the git repository (default: uses GITHUB_REPO_PATH)
+    
+    Returns:
+        tuple: (success: bool, message: str)
+    """
+    if repo_path is None:
+        repo_path = GITHUB_REPO_PATH
+    
+    try:
+        # Check if git is available
+        result = subprocess.run(['git', '--version'], 
+                              capture_output=True, 
+                              text=True, 
+                              timeout=5)
+        
+        if result.returncode != 0:
+            return False, "⚠️ Git is not installed or not available"
+        
+        # Change to repo directory
+        original_dir = os.getcwd()
+        if repo_path != ".":
+            if not os.path.exists(repo_path):
+                return False, f"⚠️ Repository path does not exist: {repo_path}"
+            os.chdir(repo_path)
+        
+        # Check if it's a git repository
+        check_result = subprocess.run(['git', 'rev-parse', '--git-dir'], 
+                                     capture_output=True, 
+                                     text=True, 
+                                     timeout=5)
+        
+        if check_result.returncode != 0:
+            os.chdir(original_dir)
+            return False, "⚠️ Not a git repository. Initialize git first with: git init"
+        
+        # Fetch latest changes
+        fetch_result = subprocess.run(['git', 'fetch', 'origin'], 
+                                     capture_output=True, 
+                                     text=True, 
+                                     timeout=30)
+        
+        if fetch_result.returncode != 0:
+            os.chdir(original_dir)
+            # Check if remote is configured
+            if "fatal: 'origin' does not appear to be a git repository" in fetch_result.stderr:
+                return False, "⚠️ No remote repository configured. Add remote with: git remote add origin <URL>"
+            return False, f"⚠️ Git fetch failed: {fetch_result.stderr}"
+        
+        # Pull changes
+        pull_result = subprocess.run(['git', 'pull', 'origin'], 
+                                    capture_output=True, 
+                                    text=True, 
+                                    timeout=30)
+        
+        os.chdir(original_dir)
+        
+        if pull_result.returncode != 0:
+            return False, f"⚠️ Git pull failed: {pull_result.stderr}"
+        
+        # Check if there were any changes
+        if "Already up to date" in pull_result.stdout or "Already up-to-date" in pull_result.stdout:
+            return True, "✅ Repository is already up to date"
+        
+        return True, f"✅ Successfully pulled from GitHub:\n{pull_result.stdout}"
+        
+    except subprocess.TimeoutExpired:
+        return False, "⚠️ Git operation timed out"
+    except Exception as e:
+        return False, f"⚠️ Error during git pull: {str(e)}"
+
+def restart_services():
+    """
+    Restart required services (Streamlit app reload)
+    
+    This will:
+    1. Reload templates from disk
+    2. Clear session state cache
+    3. Trigger app rerun
+    
+    Returns:
+        tuple: (success: bool, message: str)
+    """
+    try:
+        # Reload templates from disk if templates.json was updated
+        if os.path.exists(TEMPLATES_FILE):
+            st.session_state['templates'] = load_templates()
+        
+        # Clear any cached data (optional - uncomment if needed)
+        # st.cache_data.clear()
+        # st.cache_resource.clear()
+        
+        return True, "✅ Services will restart now..."
+    except Exception as e:
+        return False, f"⚠️ Error restarting services: {str(e)}"
+
+def render_github_controls():
+    """Render GitHub pull and restart controls in the upper left corner"""
+    st.markdown("### 🔄 GitHub Sync & Restart")
+    
+    # Show git status if available
+    try:
+        git_status = subprocess.run(['git', 'status', '--short'], 
+                                   capture_output=True, 
+                                   text=True, 
+                                   timeout=5,
+                                   cwd=GITHUB_REPO_PATH if GITHUB_REPO_PATH != "." else None)
+        
+        if git_status.returncode == 0:
+            if git_status.stdout.strip():
+                st.warning(f"⚠️ Uncommitted changes detected:\n```\n{git_status.stdout.strip()}\n```")
+            else:
+                # Get last commit info
+                last_commit = subprocess.run(['git', 'log', '-1', '--pretty=format:%h - %s (%cr)'], 
+                                           capture_output=True, 
+                                           text=True, 
+                                           timeout=5,
+                                           cwd=GITHUB_REPO_PATH if GITHUB_REPO_PATH != "." else None)
+                if last_commit.returncode == 0:
+                    st.info(f"📝 Latest commit: {last_commit.stdout}")
+    except:
+        pass  # Silently ignore git status errors
+    
+    col1, col2, col3 = st.columns([2, 2, 3])
+    
+    with col1:
+        if st.button("📥 Pull from GitHub", help="Pull latest changes from GitHub repository", use_container_width=True):
+            with st.spinner("Pulling from GitHub..."):
+                success, message = pull_from_github()
+                
+                if success:
+                    st.success(message)
+                    time.sleep(1.5)
+                else:
+                    st.error(message)
+    
+    with col2:
+        if st.button("🔄 Restart Services", help="Restart all required services and reload configurations", use_container_width=True):
+            with st.spinner("Restarting services..."):
+                success, message = restart_services()
+                
+                if success:
+                    st.success(message)
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(message)
+    
+    with col3:
+        if st.button("🚀 Pull & Restart", type="primary", help="Pull from GitHub and restart services in one click", use_container_width=True):
+            with st.spinner("Syncing and restarting..."):
+                # First pull from GitHub
+                pull_success, pull_msg = pull_from_github()
+                
+                if pull_success:
+                    st.success(pull_msg)
+                    time.sleep(1)
+                    
+                    # Then restart services
+                    restart_success, restart_msg = restart_services()
+                    if restart_success:
+                        st.success(restart_msg)
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(restart_msg)
+                else:
+                    st.error(pull_msg)
+    
+    st.divider()
 
 # ============================================================================
 # MASTER FILE PROCESSING
@@ -308,6 +524,7 @@ def get_filtered_dataframe(df_raw, config):
                 for mask in group_masks[1:]:
                     final_mask = final_mask & mask
             
+            # Apply INCLUSION filter - show only matching rows
             df_filtered = df_filtered[final_mask]
     
     # 2. Select columns (exclude tracking columns if not requested)
@@ -425,6 +642,9 @@ with col_logout2:
     if st.button("🚪 Logout"):
         st.session_state['logged_in'] = False
         st.rerun()
+
+# GitHub Pull & Restart Controls
+render_github_controls()
 
 # 1. File Upload
 uploaded_file = st.file_uploader("Upload Raw Excel File", type=["xlsx", "xls"])
@@ -630,12 +850,16 @@ if uploaded_file is not None:
         # Current filter groups display
         if st.session_state['filter_groups']:
             st.markdown("**Current Filter Logic:**")
-            groups_logic = st.radio(
-                "Combine filter groups with:",
-                options=["AND", "OR"],
-                horizontal=True,
-                key="groups_logic_radio"
-            )
+            
+            # Only show AND/OR option if there are 2+ filter groups
+            groups_logic = "AND"  # Default
+            if len(st.session_state['filter_groups']) > 1:
+                groups_logic = st.radio(
+                    "Combine filter groups with:",
+                    options=["AND", "OR"],
+                    horizontal=True,
+                    key="groups_logic_radio"
+                )
             
             filter_display = format_filter_display(st.session_state['filter_groups'], groups_logic)
             st.markdown(filter_display, unsafe_allow_html=True)
@@ -682,12 +906,15 @@ if uploaded_file is not None:
                         st.session_state['current_group_conditions'].pop(i)
                         st.rerun()
             
-            group_logic = st.radio(
-                "Combine conditions in this group with:",
-                options=["AND", "OR"],
-                horizontal=True,
-                key="group_logic_radio"
-            )
+            # Only show AND/OR option if there are 2+ conditions
+            group_logic = "AND"  # Default
+            if len(st.session_state['current_group_conditions']) > 1:
+                group_logic = st.radio(
+                    "Combine conditions in this group with:",
+                    options=["AND", "OR"],
+                    horizontal=True,
+                    key="group_logic_radio"
+                )
             
             col_save1, col_save2 = st.columns(2)
             with col_save1:
