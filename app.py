@@ -390,6 +390,12 @@ def convert_to_master_file(df_raw, filters=None):
     # Reset index
     df_master = df_master.reset_index(drop=True)
     
+    # Add PRODUCTION column (Pending Qty - Stock Quantity) to master file
+    if 'Pending Qty' in df_master.columns and 'Stock Quantity' in df_master.columns:
+        df_master['PRODUCTION'] = df_master['Pending Qty'] - df_master['Stock Quantity']
+    else:
+        df_master['PRODUCTION'] = 0
+    
     return df_master
 
 # ============================================================================
@@ -428,6 +434,14 @@ BORDER = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(styl
 # ============================================================================
 def apply_single_filter(df, col, op, val):
     """Apply a single filter condition to dataframe"""
+    # Handle PRODUCTION column calculation if needed
+    if col == 'PRODUCTION':
+        if 'Pending Qty' in df.columns and 'Stock Quantity' in df.columns:
+            df = df.copy()
+            df['PRODUCTION'] = df['Pending Qty'] - df['Stock Quantity']
+        else:
+            return pd.Series([True] * len(df), index=df.index)
+    
     if col not in df.columns:
         return df
     
@@ -526,6 +540,13 @@ def get_filtered_dataframe(df_raw, config):
             
             # Apply INCLUSION filter - show only matching rows
             df_filtered = df_filtered[final_mask]
+    
+    # Add PRODUCTION column (Pending Qty - Stock Quantity) if requested
+    if 'PRODUCTION' in config.get("columns", []):
+        if 'Pending Qty' in df_filtered.columns and 'Stock Quantity' in df_filtered.columns:
+            df_filtered['PRODUCTION'] = df_filtered['Pending Qty'] - df_filtered['Stock Quantity']
+        else:
+            df_filtered['PRODUCTION'] = 0
     
     # 2. Select columns (exclude tracking columns if not requested)
     available_cols = [c for c in config.get("columns", []) if c in df_filtered.columns]
@@ -839,9 +860,16 @@ if uploaded_file is not None:
         
         t_name = st.text_input("Template Name")
         
-        # Exclude tracking columns from selection by default
-        selectable_cols = [c for c in df_raw.columns if c not in ['Original Stock', 'Allocated Stock', 'Stock After Order']]
-        t_cols = st.multiselect("Select Columns to Include", options=selectable_cols, default=selectable_cols)
+        # All columns are available (PRODUCTION is added to master file)
+        selectable_cols = list(df_raw.columns)
+        
+        # Exclude internal tracking columns from default selection
+        default_cols = [c for c in selectable_cols if c not in ['Original Stock', 'Allocated Stock', 'Stock After Order']]
+        
+        t_cols = st.multiselect("Select Columns to Include", options=selectable_cols, default=default_cols)
+        
+        # Info about available columns
+        st.info("ℹ️ **PRODUCTION Column**: Automatically calculated as Pending Qty - Stock Quantity (Available for all templates)")
         t_sort = st.selectbox("Sort By (Optional)", options=["None"] + list(df_raw.columns))
         
         st.markdown("---")
