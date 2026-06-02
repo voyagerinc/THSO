@@ -23,11 +23,23 @@ import json
 import os
 from datetime import datetime
 import zipfile
+import subprocess
+import sys
+import time
 
 # ============================================================================
 # PAGE CONFIG
 # ============================================================================
-st.set_page_config(page_title="Excel Master & Template Exporter v4.0", layout="wide")
+st.set_page_config(page_title="Excel Master & Template Exporter v4.7", layout="wide")
+
+# ============================================================================
+# GITHUB CONFIG
+# ============================================================================
+GITHUB_CONFIG = {
+    'repo_url': 'https://github.com/your-username/excel-exporter.git',
+    'branch': 'main',
+    'enabled': False  # Set to True to enable GitHub sync
+}
 
 # ============================================================================
 # AUTHENTICATION
@@ -60,6 +72,383 @@ def login_page():
 if not check_login():
     login_page()
     st.stop()
+
+# ============================================================================
+# GITHUB SYNC & RESTART FUNCTIONS
+# ============================================================================
+def get_git_status():
+    """Get current Git status"""
+    try:
+        result = subprocess.run(
+            ['git', 'status', '--porcelain'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return result.stdout.strip() if result.returncode == 0 else None
+    except:
+        return None
+
+def get_git_log(limit=5):
+    """Get recent Git commits"""
+    try:
+        result = subprocess.run(
+            ['git', 'log', f'--oneline', f'-{limit}'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return result.stdout.strip() if result.returncode == 0 else None
+    except:
+        return None
+
+def get_current_branch():
+    """Get current Git branch"""
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
+    except:
+        return "unknown"
+
+def get_uncommitted_changes():
+    """Get count of uncommitted changes"""
+    try:
+        result = subprocess.run(
+            ['git', 'status', '--porcelain'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return len(result.stdout.strip().split('\n')) if result.stdout.strip() else 0
+    except:
+        return 0
+
+def sync_with_github():
+    """Sync application with GitHub repository"""
+    try:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        status_text.text("🔄 Fetching from GitHub...")
+        progress_bar.progress(25)
+        
+        # Fetch updates
+        fetch_result = subprocess.run(
+            ['git', 'fetch', 'origin', GITHUB_CONFIG['branch']],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        progress_bar.progress(50)
+        status_text.text("📥 Pulling latest changes...")
+        
+        # Pull latest changes
+        result = subprocess.run(
+            ['git', 'pull', 'origin', GITHUB_CONFIG['branch']],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        progress_bar.progress(100)
+        
+        if result.returncode == 0:
+            st.success("✅ GitHub sync successful!")
+            st.balloons()
+            st.info(f"Latest changes from '{GITHUB_CONFIG['branch']}' branch pulled.")
+            return True
+        else:
+            st.error(f"❌ Git pull failed: {result.stderr}")
+            return False
+    except subprocess.TimeoutExpired:
+        st.error("❌ GitHub sync timed out (exceeded 30 seconds)")
+        return False
+    except Exception as e:
+        st.error(f"❌ GitHub sync error: {str(e)}")
+        return False
+
+def push_to_github(message="Update from Excel Exporter"):
+    """Push changes to GitHub repository"""
+    try:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        status_text.text("📝 Staging changes...")
+        progress_bar.progress(25)
+        
+        # Stage changes
+        subprocess.run(['git', 'add', '.'], capture_output=True, timeout=10)
+        
+        progress_bar.progress(50)
+        status_text.text("💾 Creating commit...")
+        
+        # Commit changes
+        result = subprocess.run(
+            ['git', 'commit', '-m', message],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        progress_bar.progress(75)
+        status_text.text("📤 Pushing to GitHub...")
+        
+        # Push changes
+        push_result = subprocess.run(
+            ['git', 'push', 'origin', GITHUB_CONFIG['branch']],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        progress_bar.progress(100)
+        
+        if push_result.returncode == 0:
+            st.success("✅ Successfully pushed to GitHub!")
+            st.balloons()
+            return True
+        else:
+            st.warning("⚠️ Push may have encountered issues")
+            st.write(push_result.stderr)
+            return False
+    except Exception as e:
+        st.error(f"❌ GitHub push error: {str(e)}")
+        return False
+
+def pull_and_restart():
+    """Pull from GitHub and restart application"""
+    try:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Step 1: Fetch
+        status_text.text("🔄 Step 1: Fetching from GitHub...")
+        progress_bar.progress(15)
+        
+        fetch_result = subprocess.run(
+            ['git', 'fetch', 'origin', GITHUB_CONFIG['branch']],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        # Step 2: Pull
+        progress_bar.progress(40)
+        status_text.text("📥 Step 2: Pulling latest changes...")
+        
+        pull_result = subprocess.run(
+            ['git', 'pull', 'origin', GITHUB_CONFIG['branch']],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if pull_result.returncode != 0:
+            st.error(f"❌ Git pull failed: {pull_result.stderr}")
+            return
+        
+        progress_bar.progress(70)
+        status_text.text("✅ Step 3: Latest code downloaded!")
+        
+        # Step 3: Restart
+        progress_bar.progress(90)
+        status_text.text("🔄 Step 4: Restarting application...")
+        st.success("✅ GitHub pull successful!")
+        st.info("🔄 Restarting app in 2 seconds...")
+        st.balloons()
+        
+        progress_bar.progress(100)
+        
+        # Clear session and restart
+        import time
+        time.sleep(2)
+        
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        
+        st.rerun()
+        
+    except subprocess.TimeoutExpired:
+        st.error("❌ Operation timed out (exceeded 30 seconds)")
+    except Exception as e:
+        st.error(f"❌ Error: {str(e)}")
+
+def restart_application():
+    """Restart the Streamlit application"""
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    status_text.text("🔄 Clearing session state...")
+    progress_bar.progress(50)
+    
+    st.warning("🔄 Restarting application in 2 seconds...")
+    st.balloons()
+    
+    progress_bar.progress(90)
+    status_text.text("🔄 Restarting...")
+    
+    # Clear session state
+    import time
+    time.sleep(2)
+    
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    
+    progress_bar.progress(100)
+    # Rerun the app
+    st.rerun()
+
+def rollback_changes():
+    """Rollback to previous Git commit"""
+    try:
+        result = subprocess.run(
+            ['git', 'reset', '--hard', 'HEAD~1'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode == 0:
+            st.success("✅ Rolled back to previous commit!")
+            st.info("Previous changes have been undone.")
+            return True
+        else:
+            st.error(f"❌ Rollback failed: {result.stderr}")
+            return False
+    except Exception as e:
+        st.error(f"❌ Rollback error: {str(e)}")
+        return False
+
+# ============================================================================
+# SYSTEM STATUS SIDEBAR
+# ============================================================================
+def show_system_status():
+    """Display system status in sidebar"""
+    with st.sidebar:
+        st.divider()
+        st.subheader("⚙️ System Controls")
+        
+        # Main combined button
+        if GITHUB_CONFIG['enabled']:
+            if st.button("🚀 Pull & Restart", use_container_width=True, key="pull_restart_btn"):
+                pull_and_restart()
+        else:
+            if st.button("🔄 Restart", use_container_width=True, key="restart_btn"):
+                restart_application()
+        
+        # Individual buttons (if GitHub enabled)
+        if GITHUB_CONFIG['enabled']:
+            st.divider()
+            st.caption("**Other Options:**")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("📥 Sync", use_container_width=True, key="sync_btn"):
+                    sync_with_github()
+            
+            with col2:
+                if st.button("🔄 Restart Only", use_container_width=True, key="restart_only_btn"):
+                    restart_application()
+            
+            with col3:
+                if st.button("📊 Status", use_container_width=True, key="status_btn"):
+                    st.session_state['show_git_status'] = True
+        
+        st.divider()
+        
+        # Display app version and status
+        st.caption("📊 Excel Master & Template Exporter")
+        st.caption("Version: 4.7")
+        st.caption(f"Status: ✅ Running")
+        st.caption(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        if GITHUB_CONFIG['enabled']:
+            current_branch = get_current_branch()
+            uncommitted = get_uncommitted_changes()
+            
+            st.caption(f"🔗 GitHub: {GITHUB_CONFIG['repo_url'].split('/')[-1]}")
+            st.caption(f"📌 Branch: {current_branch}")
+            
+            if uncommitted > 0:
+                st.caption(f"⚠️ Changes: {uncommitted} file(s)")
+            else:
+                st.caption(f"✅ Clean workspace")
+
+# ============================================================================
+# GITHUB STATUS DASHBOARD
+# ============================================================================
+def show_github_dashboard():
+    """Show comprehensive GitHub sync status dashboard"""
+    st.header("📊 GitHub Sync Dashboard")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        branch = get_current_branch()
+        st.metric("📌 Current Branch", branch)
+    
+    with col2:
+        changes = get_uncommitted_changes()
+        st.metric("⚠️ Uncommitted Changes", changes)
+    
+    with col3:
+        st.metric("🔗 Repository", GITHUB_CONFIG['repo_url'].split('/')[-1].replace('.git', ''))
+    
+    with col4:
+        st.metric("⏱️ Last Check", datetime.now().strftime('%H:%M:%S'))
+    
+    st.divider()
+    
+    # Git status details
+    st.subheader("📝 Git Status Details")
+    git_status = get_git_status()
+    if git_status:
+        st.code(git_status, language="bash")
+    else:
+        st.info("✅ Working directory clean")
+    
+    st.divider()
+    
+    # Recent commits
+    st.subheader("📜 Recent Commits")
+    git_log = get_git_log(10)
+    if git_log:
+        st.code(git_log, language="bash")
+    else:
+        st.warning("No commits found")
+    
+    st.divider()
+    
+    # GitHub operations
+    st.subheader("🔄 GitHub Operations")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("📥 Pull Latest", use_container_width=True):
+            sync_with_github()
+    
+    with col2:
+        commit_msg = st.text_input("Commit message", "Update from Excel Exporter")
+        if st.button("📤 Push Changes", use_container_width=True):
+            push_to_github(commit_msg)
+    
+    with col3:
+        if st.button("↩️ Rollback", use_container_width=True):
+            st.warning("⚠️ Are you sure? This will undo the last commit.")
+            col_rb1, col_rb2 = st.columns(2)
+            with col_rb1:
+                if st.button("✅ Yes, Rollback", use_container_width=True):
+                    rollback_changes()
+            with col_rb2:
+                if st.button("❌ Cancel", use_container_width=True):
+                    st.info("Rollback cancelled")
 
 # ============================================================================
 # DEFAULT SHEET TEMPLATES
@@ -617,7 +1006,34 @@ def create_workbook(master_df, sheet_configs, sheet_names_to_include=None):
 # ============================================================================
 # MAIN APP UI
 # ============================================================================
-st.title("📊 Excel Master & Template Exporter v4.0")
+
+# Display system controls FIRST
+show_system_status()
+
+# Create layout with title and button
+col_title, col_pull = st.columns([8, 2])
+
+with col_title:
+    st.title("📊 Excel Master & Template Exporter v4.7")
+
+with col_pull:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if GITHUB_CONFIG['enabled']:
+        if st.button("🚀 PULL &\nRESTART", use_container_width=True, key="top_pull_restart"):
+            pull_and_restart()
+    else:
+        if st.button("🔄 RESTART", use_container_width=True, key="top_restart_only"):
+            restart_application()
+
+# Show GitHub Dashboard if status button clicked
+if st.session_state.get('show_git_status', False) and GITHUB_CONFIG['enabled']:
+    show_github_dashboard()
+    st.divider()
+    if st.button("← Back to Main", use_container_width=True):
+        st.session_state['show_git_status'] = False
+        st.rerun()
+    st.stop()
+
 st.markdown("**10 Sheets | Combined + Separate Files | Template Management**")
 
 tab1, tab2, tab3 = st.tabs(["📥 Generate Sheets", "⚙️ Sheet Templates", "📁 Custom Templates"])
