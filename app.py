@@ -462,72 +462,88 @@ DEFAULT_SHEETS = {
         'enabled': True,
         'description': 'Sample orders'
     },
+    'HOLD': {
+        'filter_type': 'remarks',
+        'filter_value': 'Hold',
+        'columns': 13,
+        'has_subtotals': False,
+        'enabled': True,
+        'description': 'Hold orders (remarks contains Hold)'
+    },
     'RU': {
         'filter_type': 'sales_person_single',
         'filter_value': 'RU',
+        'exclude_remarks': ['Hold', 'SAMPLE'],  # Exclude Hold and Sample
         'columns': 19,
         'has_subtotals': False,
         'enabled': True,
-        'description': 'RU Production Division'
+        'description': 'RU Production Division (excluding Hold & Sample)'
     },
     'GS': {
         'filter_type': 'sales_person_single',
         'filter_value': 'GS',
+        'exclude_remarks': ['Hold', 'SAMPLE'],  # Exclude Hold and Sample
         'columns': 19,
         'has_subtotals': False,
         'enabled': True,
-        'description': 'GS Production Division'
+        'description': 'GS Production Division (excluding Hold & Sample)'
     },
     'NKG': {
         'filter_type': 'sales_person_single',
         'filter_value': 'NKG',
+        'exclude_remarks': ['Hold', 'SAMPLE'],  # Exclude Hold and Sample
         'columns': 19,
         'has_subtotals': False,
         'enabled': True,
-        'description': 'NKG Production Division'
+        'description': 'NKG Production Division (excluding Hold & Sample)'
     },
     'AVS': {
         'filter_type': 'sales_person_grouped',
         'filter_value': ['ARUN', 'JS', 'PS'],
+        'exclude_remarks': ['Hold', 'SAMPLE'],  # Exclude Hold and Sample
         'columns': 19,
         'has_subtotals': False,  # FIXED: Don't count subtotal rows
         'group_by': 'Sales Person Name',
         'enabled': True,
-        'description': 'AVS with Sales Person subtotals (data only, no subtotal counting)'
+        'description': 'AVS with Sales Person subtotals (excluding Hold & Sample)'
     },
     'NITIN': {
         'filter_type': 'line_grouped',
         'filter_value': 'LINE CC',
+        'exclude_remarks': ['Hold', 'SAMPLE'],  # Exclude Hold and Sample
         'columns': 13,
         'has_subtotals': False,  # FIXED: Don't count subtotal rows
         'group_by': 'Line',
         'enabled': True,
-        'description': 'LINE CC with subtotals (data only, no subtotal counting)'
+        'description': 'LINE CC with subtotals (excluding Hold & Sample)'
     },
     'RAJESH': {
         'filter_type': 'line_grouped',
         # FIXED: Include both PHILIPS and PHILLIPS (handles spelling variants)
         'filter_value': ['PHILIPS', 'PHILLIPS', 'OTG'],
+        'exclude_remarks': ['Hold', 'SAMPLE'],  # Exclude Hold and Sample
         'columns': 13,
         'has_subtotals': True,
         'group_by': 'Line',
         'enabled': True,
-        'description': 'PHILIPS/PHILLIPS Air Fryer with subtotals'
+        'description': 'PHILIPS/PHILLIPS Air Fryer with subtotals (excluding Hold & Sample)'
     },
     'PRADEEP': {
         'filter_type': 'line_grouped',
         # FIXED: Include LINE C variants AND MARKET
         'filter_value': ['LINE C', 'MARKET'],
+        'exclude_remarks': ['Hold', 'SAMPLE'],  # Exclude Hold and Sample
         'columns': 13,
         'has_subtotals': True,
         'group_by': 'Line',
         'enabled': True,
-        'description': 'LINE C variants + MARKET with subtotals'
+        'description': 'LINE C variants + MARKET with subtotals (excluding Hold & Sample)'
     },
     'ASHISH': {
         'filter_type': 'line_grouped',
         # FIXED: Include both LINE G/L and LINE SS
         'filter_value': ['LINE G/L', 'LINE SS'],
+        'exclude_remarks': ['Hold', 'SAMPLE'],  # Exclude Hold and Sample
         'columns': 13,
         'has_subtotals': True,
         'group_by': 'Line',
@@ -891,6 +907,17 @@ def generate_sheet_with_filter(master_df, template_config):
                 total_row = add_total_row(sheet_df, "TOTAL")
                 sheet_df = pd.concat([sheet_df, total_row], ignore_index=True)
                 return sheet_df
+        
+        # Apply exclude_remarks filter if specified
+        if template_config.get('exclude_remarks'):
+            exclude_vals = template_config['exclude_remarks']
+            if isinstance(exclude_vals, str):
+                exclude_vals = [exclude_vals]
+            
+            # Exclude rows where remarks contains any of the excluded values
+            for exclude_val in exclude_vals:
+                sheet_df = sheet_df[~sheet_df['Remarks'].astype(str).str.contains(
+                    exclude_val, case=False, na=False)]
         
         # Sort by date
         sheet_df = sort_by_date(sheet_df)
