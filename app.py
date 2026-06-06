@@ -841,30 +841,37 @@ def sort_by_date(df):
     except:
         return df
 
-def sort_by_line_and_sales_person(df):
-    """Sort by Line (primary) and Sales Person Name (secondary)"""
+def sort_by_delivery_date_desc(df):
+    """Sort by Delivery Date in descending order (newest first)"""
     try:
         df_sort = df.copy()
         
-        # Sort by Line first, then Sales Person Name
-        sort_columns = []
-        if 'Line' in df_sort.columns:
-            sort_columns.append('Line')
-        if 'Sales Person Name' in df_sort.columns:
-            sort_columns.append('Sales Person Name')
-        
-        if sort_columns:
-            df_sort = df_sort.sort_values(sort_columns, ascending=[True, True], na_position='last')
+        if 'Delivery Date' in df_sort.columns:
+            # Convert strings back to datetime for sorting only
+            try:
+                df_sort['_sort_key'] = pd.to_datetime(df_sort['Delivery Date'], format='%d-%m-%Y', errors='coerce')
+                df_sort = df_sort.sort_values('_sort_key', ascending=False, na_position='last')
+                df_sort = df_sort.drop('_sort_key', axis=1)
+            except:
+                df_sort = df_sort.sort_values('Delivery Date', ascending=False, na_position='last')
+        elif 'SO Date' in df_sort.columns:
+            # Fallback to SO Date if Delivery Date not available
+            try:
+                df_sort['_sort_key'] = pd.to_datetime(df_sort['SO Date'], format='%d-%m-%Y', errors='coerce')
+                df_sort = df_sort.sort_values('_sort_key', ascending=False, na_position='last')
+                df_sort = df_sort.drop('_sort_key', axis=1)
+            except:
+                df_sort = df_sort.sort_values('SO Date', ascending=False, na_position='last')
         
         df_sort = df_sort.reset_index(drop=True)
         return df_sort
     except:
         return df
 
-def apply_line_wise_subtotals(df):
+def apply_line_wise_subtotals_only(df):
     """
-    Group by Line, then by Sales Person Name within each Line.
-    Add subtotals for each Sales Person, then subtotals for each Line.
+    Group by Line only.
+    Add subtotals for each Line (no Sales Person level subtotals).
     """
     if len(df) == 0:
         return df
@@ -872,24 +879,21 @@ def apply_line_wise_subtotals(df):
     try:
         result_frames = []
         
-        # Sort by Line and Sales Person Name
-        df = sort_by_line_and_sales_person(df)
+        # Sort by Delivery Date descending
+        df = sort_by_delivery_date_desc(df)
         
         # Group by Line
         for line_name, line_group in df.groupby('Line', sort=False):
-            # Within each line, group by Sales Person Name
-            for person_name, person_group in line_group.groupby('Sales Person Name', sort=False):
-                # Add data rows
-                result_frames.append(person_group)
-                
-                # Add Sales Person subtotal
-                if len(person_group) > 0:
-                    sp_subtotal = add_subtotal_row(person_group, f"Subtotal: {person_name}")
-                    result_frames.append(sp_subtotal)
+            # Sort each line group by Delivery Date descending
+            line_group = sort_by_delivery_date_desc(line_group)
             
-            # Add Line subtotal (sum of all Sales Persons in this Line)
-            line_subtotal = add_subtotal_row(line_group, f"Subtotal: {line_name} (Line Total)")
-            result_frames.append(line_subtotal)
+            # Add all rows for this line
+            result_frames.append(line_group)
+            
+            # Add Line subtotal only (no Sales Person level)
+            if len(line_group) > 0:
+                line_subtotal = add_subtotal_row(line_group, f"Subtotal: {line_name}")
+                result_frames.append(line_subtotal)
             
             # Add separator
             separator = pd.DataFrame([['' for _ in df.columns]], columns=df.columns)
@@ -905,6 +909,8 @@ def apply_line_wise_subtotals(df):
         return result_df
     except Exception as e:
         return df
+
+def sort_by_line_and_sales_person(df):
 
 def apply_column_set(sheet_df, num_cols):
     """Apply column set (13 or 19) - includes PRODUCTION in all sheets"""
@@ -1006,13 +1012,13 @@ def generate_sheet_with_filter(master_df, template_config):
         
         # Apply Line-wise sorting and subtotals for all sheets
         if len(sheet_df) > 0:
-            if 'Line' in sheet_df.columns and 'Sales Person Name' in sheet_df.columns:
-                # Use line-wise grouping with sales person subtotals
-                sheet_df = apply_line_wise_subtotals(sheet_df)
+            if 'Line' in sheet_df.columns:
+                # Use line-wise grouping with line-only subtotals
+                sheet_df = apply_line_wise_subtotals_only(sheet_df)
             else:
-                # Fallback: Just sort by date and add total
-                sheet_df = sort_by_date(sheet_df)
-                total_row = add_total_row(sheet_df, "TOTAL")
+                # Fallback: Just sort by delivery date and add total
+                sheet_df = sort_by_delivery_date_desc(sheet_df)
+                total_row = add_total_row(sheet_df, "GRAND TOTAL")
                 sheet_df = pd.concat([sheet_df, total_row], ignore_index=True)
         
         sheet_df = sheet_df.reset_index(drop=True)
@@ -1100,12 +1106,12 @@ def create_workbook(master_df, sheet_configs, sheet_names_to_include=None):
                 if config['filter_type'] == 'none':
                     sheet_df = master_df.copy()
                     # Apply line-wise sorting and subtotals for Master File
-                    if 'Line' in sheet_df.columns and 'Sales Person Name' in sheet_df.columns:
-                        sheet_df = apply_line_wise_subtotals(sheet_df)
+                    if 'Line' in sheet_df.columns:
+                        sheet_df = apply_line_wise_subtotals_only(sheet_df)
                     else:
-                        sheet_df = sort_by_date(sheet_df)
+                        sheet_df = sort_by_delivery_date_desc(sheet_df)
                         if len(sheet_df) > 0:
-                            total_row = add_total_row(sheet_df, "TOTAL")
+                            total_row = add_total_row(sheet_df, "GRAND TOTAL")
                             sheet_df = pd.concat([sheet_df, total_row], ignore_index=True)
                 else:
                     sheet_df = generate_sheet_with_filter(master_df, config)
@@ -1154,12 +1160,14 @@ def create_workbook(master_df, sheet_configs, sheet_names_to_include=None):
                             # Highlight entire row yellow for current date -1
                             cell.fill = yellow_fill
                             cell.font = yellow_font
-                        elif isinstance(value, str) and value == "TOTAL":
+                        elif isinstance(value, str) and value == "GRAND TOTAL":
+                            # Gold background for GRAND TOTAL
                             cell.fill = PatternFill(start_color="FFC000", end_color="FFC000", fill_type="solid")
                             cell.font = Font(bold=True, size=11, color="000000")
                         elif isinstance(value, str) and 'Subtotal' in str(value):
-                            cell.fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
-                            cell.font = Font(bold=True, size=10)
+                            # Light blue background for Line subtotals
+                            cell.fill = PatternFill(start_color="B4D7E8", end_color="B4D7E8", fill_type="solid")
+                            cell.font = Font(bold=True, size=10, color="000000")
                 
                 # Auto-fit columns
                 for col in ws.columns:
