@@ -676,9 +676,12 @@ def convert_to_master_file(source_df, filters=None):
         # Handle DD-MM-YYYY format (e.g., 20-04-2026)
         try:
             df[date_col] = pd.to_datetime(df[date_col], format='%d-%m-%Y', errors='coerce')
+            # Format as DD-MM-YYYY string to preserve format
+            df[date_col] = df[date_col].dt.strftime('%d-%m-%Y')
         except:
             # Fallback to auto-detection if format fails
             df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+            df[date_col] = df[date_col].dt.strftime('%d-%m-%Y')
     
     # ========================================================================
     # STEP 3: DETERMINE GROUPING COLUMN (Item Code preferred)
@@ -813,13 +816,95 @@ def add_total_row(df, total_label="TOTAL"):
 
 def sort_by_date(df):
     try:
-        if 'SO Date' in df.columns:
-            df = df.sort_values('SO Date', ascending=False, na_position='last')
-        elif 'Delivery Date' in df.columns:
-            df = df.sort_values('Delivery Date', ascending=False, na_position='last')
+        # Create a copy to avoid modifying original during sorting
+        df_sort = df.copy()
+        
+        if 'SO Date' in df_sort.columns:
+            # Convert strings back to datetime for sorting only
+            try:
+                df_sort['_sort_key'] = pd.to_datetime(df_sort['SO Date'], format='%d-%m-%Y', errors='coerce')
+                df_sort = df_sort.sort_values('_sort_key', ascending=False, na_position='last')
+                df_sort = df_sort.drop('_sort_key', axis=1)
+            except:
+                df_sort = df_sort.sort_values('SO Date', ascending=False, na_position='last')
+        elif 'Delivery Date' in df_sort.columns:
+            # Convert strings back to datetime for sorting only
+            try:
+                df_sort['_sort_key'] = pd.to_datetime(df_sort['Delivery Date'], format='%d-%m-%Y', errors='coerce')
+                df_sort = df_sort.sort_values('_sort_key', ascending=False, na_position='last')
+                df_sort = df_sort.drop('_sort_key', axis=1)
+            except:
+                df_sort = df_sort.sort_values('Delivery Date', ascending=False, na_position='last')
+        
+        df_sort = df_sort.reset_index(drop=True)
+        return df_sort
     except:
-        pass
-    return df
+        return df
+
+def sort_by_line_and_sales_person(df):
+    """Sort by Line (primary) and Sales Person Name (secondary)"""
+    try:
+        df_sort = df.copy()
+        
+        # Sort by Line first, then Sales Person Name
+        sort_columns = []
+        if 'Line' in df_sort.columns:
+            sort_columns.append('Line')
+        if 'Sales Person Name' in df_sort.columns:
+            sort_columns.append('Sales Person Name')
+        
+        if sort_columns:
+            df_sort = df_sort.sort_values(sort_columns, ascending=[True, True], na_position='last')
+        
+        df_sort = df_sort.reset_index(drop=True)
+        return df_sort
+    except:
+        return df
+
+def apply_line_wise_subtotals(df):
+    """
+    Group by Line, then by Sales Person Name within each Line.
+    Add subtotals for each Sales Person, then subtotals for each Line.
+    """
+    if len(df) == 0:
+        return df
+    
+    try:
+        result_frames = []
+        
+        # Sort by Line and Sales Person Name
+        df = sort_by_line_and_sales_person(df)
+        
+        # Group by Line
+        for line_name, line_group in df.groupby('Line', sort=False):
+            # Within each line, group by Sales Person Name
+            for person_name, person_group in line_group.groupby('Sales Person Name', sort=False):
+                # Add data rows
+                result_frames.append(person_group)
+                
+                # Add Sales Person subtotal
+                if len(person_group) > 0:
+                    sp_subtotal = add_subtotal_row(person_group, f"Subtotal: {person_name}")
+                    result_frames.append(sp_subtotal)
+            
+            # Add Line subtotal (sum of all Sales Persons in this Line)
+            line_subtotal = add_subtotal_row(line_group, f"Subtotal: {line_name} (Line Total)")
+            result_frames.append(line_subtotal)
+            
+            # Add separator
+            separator = pd.DataFrame([['' for _ in df.columns]], columns=df.columns)
+            result_frames.append(separator)
+        
+        result_df = pd.concat(result_frames, ignore_index=True)
+        
+        # Add GRAND TOTAL at the end
+        if len(result_df) > 0:
+            total_row = add_total_row(df, "GRAND TOTAL")
+            result_df = pd.concat([result_df, total_row], ignore_index=True)
+        
+        return result_df
+    except Exception as e:
+        return df
 
 def apply_column_set(sheet_df, num_cols):
     """Apply column set (13 or 19) - includes PRODUCTION in all sheets"""
@@ -919,13 +1004,16 @@ def generate_sheet_with_filter(master_df, template_config):
                 sheet_df = sheet_df[~sheet_df['Remarks'].astype(str).str.contains(
                     exclude_val, case=False, na=False)]
         
-        # Sort by date
-        sheet_df = sort_by_date(sheet_df)
-        
-        # Add TOTAL row
+        # Apply Line-wise sorting and subtotals for all sheets
         if len(sheet_df) > 0:
-            total_row = add_total_row(sheet_df, "TOTAL")
-            sheet_df = pd.concat([sheet_df, total_row], ignore_index=True)
+            if 'Line' in sheet_df.columns and 'Sales Person Name' in sheet_df.columns:
+                # Use line-wise grouping with sales person subtotals
+                sheet_df = apply_line_wise_subtotals(sheet_df)
+            else:
+                # Fallback: Just sort by date and add total
+                sheet_df = sort_by_date(sheet_df)
+                total_row = add_total_row(sheet_df, "TOTAL")
+                sheet_df = pd.concat([sheet_df, total_row], ignore_index=True)
         
         sheet_df = sheet_df.reset_index(drop=True)
         return sheet_df
@@ -933,6 +1021,58 @@ def generate_sheet_with_filter(master_df, template_config):
     except Exception as e:
         st.error(f"Error generating sheet: {str(e)}")
         return None
+
+# ============================================================================
+# FORMAT DATE COLUMNS FOR EXCEL OUTPUT
+# ============================================================================
+def format_date_columns(df):
+    """Convert all date columns to DD-MM-YYYY string format"""
+    df = df.copy()
+    
+    date_columns = ['SO Date', 'Delivery Date', 'Order Date', 'Date']
+    
+    for col in date_columns:
+        if col in df.columns:
+            try:
+                # Convert to datetime if not already
+                df[col] = pd.to_datetime(df[col], errors='coerce')
+                # Format as DD-MM-YYYY string
+                df[col] = df[col].dt.strftime('%d-%m-%Y')
+            except:
+                pass
+    
+    return df
+
+# ============================================================================
+# DETECT CURRENT DATE -1 ROWS
+# ============================================================================
+def get_current_date_minus_1():
+    """Get yesterday's date in DD-MM-YYYY format"""
+    from datetime import datetime, timedelta
+    yesterday = datetime.now() - timedelta(days=1)
+    return yesterday.strftime('%d-%m-%Y')
+
+def is_row_current_date_minus_1(row_data, sheet_df, row_index):
+    """Check if a row's date is current date -1"""
+    yesterday = get_current_date_minus_1()
+    
+    # Check SO Date column (most common)
+    if 'SO Date' in sheet_df.columns:
+        col_index = list(sheet_df.columns).index('SO Date')
+        if col_index < len(row_data):
+            cell_value = str(row_data[col_index]) if row_data[col_index] is not None else ""
+            if cell_value == yesterday:
+                return True
+    
+    # Check Delivery Date column
+    if 'Delivery Date' in sheet_df.columns:
+        col_index = list(sheet_df.columns).index('Delivery Date')
+        if col_index < len(row_data):
+            cell_value = str(row_data[col_index]) if row_data[col_index] is not None else ""
+            if cell_value == yesterday:
+                return True
+    
+    return False
 
 # ============================================================================
 # CREATE WORKBOOK WITH SHEETS
@@ -959,10 +1099,14 @@ def create_workbook(master_df, sheet_configs, sheet_names_to_include=None):
                 # Generate sheet data
                 if config['filter_type'] == 'none':
                     sheet_df = master_df.copy()
-                    sheet_df = sort_by_date(sheet_df)
-                    if len(sheet_df) > 0:
-                        total_row = add_total_row(sheet_df, "TOTAL")
-                        sheet_df = pd.concat([sheet_df, total_row], ignore_index=True)
+                    # Apply line-wise sorting and subtotals for Master File
+                    if 'Line' in sheet_df.columns and 'Sales Person Name' in sheet_df.columns:
+                        sheet_df = apply_line_wise_subtotals(sheet_df)
+                    else:
+                        sheet_df = sort_by_date(sheet_df)
+                        if len(sheet_df) > 0:
+                            total_row = add_total_row(sheet_df, "TOTAL")
+                            sheet_df = pd.concat([sheet_df, total_row], ignore_index=True)
                 else:
                     sheet_df = generate_sheet_with_filter(master_df, config)
                 
@@ -972,6 +1116,9 @@ def create_workbook(master_df, sheet_configs, sheet_names_to_include=None):
                 
                 # Apply column set
                 sheet_df = apply_column_set(sheet_df, config.get('columns', 13))
+                
+                # Format date columns to DD-MM-YYYY BEFORE writing to Excel
+                sheet_df = format_date_columns(sheet_df)
                 
                 # Create worksheet
                 ws = wb.create_sheet(title=sheet_name[:31])
@@ -989,13 +1136,25 @@ def create_workbook(master_df, sheet_configs, sheet_names_to_include=None):
                     cell.font = header_font
                     cell.alignment = header_alignment
                 
+                # Yellow highlight for current date -1 rows
+                yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+                yellow_font = Font(color="000000", size=10)
+                
                 # Add data
                 for row_num, row_data in enumerate(dataframe_to_rows(sheet_df, index=False, header=False), 2):
+                    # Check if this row is current date -1
+                    is_current_date_minus_1 = is_row_current_date_minus_1(row_data, sheet_df, row_num - 2)
+                    
                     for col_num, value in enumerate(row_data, 1):
                         cell = ws.cell(row=row_num, column=col_num)
                         cell.value = value
                         
-                        if isinstance(value, str) and value == "TOTAL":
+                        # Apply appropriate styling
+                        if is_current_date_minus_1:
+                            # Highlight entire row yellow for current date -1
+                            cell.fill = yellow_fill
+                            cell.font = yellow_font
+                        elif isinstance(value, str) and value == "TOTAL":
                             cell.fill = PatternFill(start_color="FFC000", end_color="FFC000", fill_type="solid")
                             cell.font = Font(bold=True, size=11, color="000000")
                         elif isinstance(value, str) and 'Subtotal' in str(value):
