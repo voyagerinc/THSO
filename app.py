@@ -910,8 +910,6 @@ def apply_line_wise_subtotals_only(df):
     except Exception as e:
         return df
 
-def sort_by_line_and_sales_person(df):
-
 def apply_column_set(sheet_df, num_cols):
     """Apply column set (13 or 19) - includes PRODUCTION in all sheets"""
     columns_13 = [
