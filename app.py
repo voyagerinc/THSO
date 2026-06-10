@@ -510,45 +510,66 @@ DEFAULT_SHEETS = {
     'NITIN': {
         'filter_type': 'line_grouped',
         'filter_value': 'LINE CC',
-        'exclude_remarks': ['Hold', 'SAMPLE'],  # Exclude Hold and Sample
+        'exclude_remarks': ['Hold', 'SAMPLE'],
         'columns': 13,
-        'has_subtotals': False,  # FIXED: Don't count subtotal rows
+        'has_subtotals': False,
         'group_by': 'Line',
         'enabled': True,
-        'description': 'LINE CC with subtotals (excluding Hold & Sample)'
+        'description': 'LINE CC (excluding Hold & Sample & Finished Good)',
+        # ✅ PRE-PROCESSING FILTERS for Nitin
+        'pre_processing_filters': [
+            {'column': 'Category', 'contains': 'Finished Good', 'enabled': True},
+            {'column': 'Remarks', 'contains': 'Sample', 'enabled': True},
+            {'column': 'Remarks', 'contains': 'Hold', 'enabled': True}
+        ]
     },
     'RAJESH': {
         'filter_type': 'line_grouped',
-        # FIXED: Include both PHILIPS and PHILLIPS (handles spelling variants)
         'filter_value': ['PHILIPS', 'PHILLIPS', 'OTG'],
-        'exclude_remarks': ['Hold', 'SAMPLE'],  # Exclude Hold and Sample
+        'exclude_remarks': ['Hold', 'SAMPLE'],
         'columns': 13,
         'has_subtotals': True,
         'group_by': 'Line',
         'enabled': True,
-        'description': 'PHILIPS/PHILLIPS Air Fryer with subtotals (excluding Hold & Sample)'
+        'description': 'PHILIPS/PHILLIPS Air Fryer (excluding Semi Finished Good & Hold & Sample)',
+        # ✅ PRE-PROCESSING FILTERS for Rajesh
+        'pre_processing_filters': [
+            {'column': 'Category', 'contains': 'Semi Finished Good', 'enabled': True},
+            {'column': 'Remarks', 'contains': 'Sample', 'enabled': True},
+            {'column': 'Remarks', 'contains': 'Hold', 'enabled': True}
+        ]
     },
     'PRADEEP': {
         'filter_type': 'line_grouped',
-        # FIXED: Include LINE C variants AND MARKET
         'filter_value': ['LINE C', 'MARKET'],
-        'exclude_remarks': ['Hold', 'SAMPLE'],  # Exclude Hold and Sample
+        'exclude_remarks': ['Hold', 'SAMPLE'],
         'columns': 13,
         'has_subtotals': True,
         'group_by': 'Line',
         'enabled': True,
-        'description': 'LINE C variants + MARKET with subtotals (excluding Hold & Sample)'
+        'description': 'LINE C + MARKET (excluding Semi Finished Good & Hold & Sample)',
+        # ✅ PRE-PROCESSING FILTERS for Pradeep
+        'pre_processing_filters': [
+            {'column': 'Category', 'contains': 'Semi Finished Good', 'enabled': True},
+            {'column': 'Remarks', 'contains': 'Sample', 'enabled': True},
+            {'column': 'Remarks', 'contains': 'Hold', 'enabled': True}
+        ]
     },
     'ASHISH': {
         'filter_type': 'line_grouped',
-        # FIXED: Include both LINE G/L and LINE SS
         'filter_value': ['LINE G/L', 'LINE SS'],
-        'exclude_remarks': ['Hold', 'SAMPLE'],  # Exclude Hold and Sample
+        'exclude_remarks': ['Hold', 'SAMPLE'],
         'columns': 13,
         'has_subtotals': True,
         'group_by': 'Line',
         'enabled': True,
-        'description': 'LINE G/L + LINE SS with subtotals'
+        'description': 'LINE G/L + LINE SS (excluding Semi Finished Good & Hold & Sample)',
+        # ✅ PRE-PROCESSING FILTERS for Ashish
+        'pre_processing_filters': [
+            {'column': 'Category', 'contains': 'Semi Finished Good', 'enabled': True},
+            {'column': 'Remarks', 'contains': 'Sample', 'enabled': True},
+            {'column': 'Remarks', 'contains': 'Hold', 'enabled': True}
+        ]
     },
     'Master File': {
         'filter_type': 'none',
@@ -633,6 +654,34 @@ def convert_to_master_file(source_df, filters=None):
     df = source_df.copy()
     
     # ========================================================================
+    # PRE-STEP: DETERMINE GROUPING COLUMN (needed for STEP 0)
+    # ========================================================================
+    group_col = None
+    if 'Item Code' in source_df.columns:
+        group_col = 'Item Code'
+    elif 'Item Name' in source_df.columns:
+        group_col = 'Item Name'
+    else:
+        # Can't proceed without grouping column
+        st.warning("Neither 'Item Code' nor 'Item Name' found. Using raw data as master file.")
+        return source_df
+    
+    # ========================================================================
+    # STEP 0: READ ORIGINAL STOCK FROM SOURCE (BEFORE FILTERING)
+    # ========================================================================
+    # Critical: Store original stock from source data before any filtering
+    # This ensures we have the correct stock value even if first row gets filtered
+    original_stock_map = {}
+    
+    for item_key in source_df.groupby(group_col, sort=False).groups.keys():
+        item_group = source_df[source_df[group_col].astype(str).str.strip() == str(item_key).strip()]
+        
+        if 'Stock Quantity' in item_group.columns:
+            stock_values = item_group['Stock Quantity'].dropna()
+            if len(stock_values) > 0:
+                original_stock_map[item_key] = float(stock_values.iloc[0])
+    
+    # ========================================================================
     # STEP 1: APPLY PRE-PROCESSING FILTERS (REMOVE unwanted rows)
     # ========================================================================
     if filters:
@@ -667,59 +716,72 @@ def convert_to_master_file(source_df, filters=None):
     # STEP 2: DETECT DATE COLUMN
     # ========================================================================
     date_col = None
+    date_col_display = None  # Store original date format column name
+    
     for col in ['SO Date', 'Order Date', 'Date']:
         if col in df.columns:
             date_col = col
+            date_col_display = f"{col}_DISPLAY"  # Create a display column
             break
     
     if date_col:
-        # Handle DD-MM-YYYY format (e.g., 20-04-2026)
+        # ✅ FIX: Keep dates as datetime objects for CORRECT SORTING
+        # Convert to datetime (auto-detect format)
         try:
-            df[date_col] = pd.to_datetime(df[date_col], format='%d-%m-%Y', errors='coerce')
-            # Format as DD-MM-YYYY string to preserve format
-            df[date_col] = df[date_col].dt.strftime('%d-%m-%Y')
-        except:
-            # Fallback to auto-detection if format fails
             df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-            df[date_col] = df[date_col].dt.strftime('%d-%m-%Y')
+        except:
+            # If auto-detect fails, try DD-MM-YYYY format
+            try:
+                df[date_col] = pd.to_datetime(df[date_col], format='%d-%m-%Y', errors='coerce')
+            except:
+                pass  # Keep original if conversion fails
+        
+        # Create display column with DD-MM-YYYY format (for output only)
+        if pd.api.types.is_datetime64_any_dtype(df[date_col]):
+            df[date_col_display] = df[date_col].dt.strftime('%d-%m-%Y')
     
     # ========================================================================
-    # STEP 3: DETERMINE GROUPING COLUMN (Item Code preferred)
+    # STEP 3: SORT BY ITEM AND DATE (Chronological order)
     # ========================================================================
-    group_col = None
-    if 'Item Code' in df.columns:
-        group_col = 'Item Code'
-    elif 'Item Name' in df.columns:
-        group_col = 'Item Name'
-    else:
-        st.warning("Neither 'Item Code' nor 'Item Name' found. Using raw data as master file.")
-        return df
-    
-    # ========================================================================
-    # STEP 4: SORT BY ITEM AND DATE (Chronological order)
-    # ========================================================================
+    # group_col already determined in PRE-STEP
     sort_cols = [group_col]
     if date_col:
         sort_cols.append(date_col)
     df = df.sort_values(sort_cols, ascending=[True, True])
     
     # ========================================================================
-    # STEP 5: CALCULATE RUNNING STOCK ALLOCATION
+    # STEP 4: CALCULATE RUNNING STOCK ALLOCATION (FIFO METHOD WITH LAST ORDER RULE)
     # ========================================================================
     result_rows = []
     
     for item_key, group in df.groupby(group_col, sort=False):
-        # Get original stock from first row
-        original_stock = 0
-        if 'Stock Quantity' in group.columns:
-            stock_values = group['Stock Quantity'].dropna()
-            if len(stock_values) > 0:
-                original_stock = float(stock_values.iloc[0])
+        # ✅ FIX: EXPLICITLY SORT GROUP BY DATE ASCENDING (OLDEST FIRST) FOR FIFO
+        # This ensures oldest orders are allocated stock first
+        if date_col and date_col in group.columns:
+            group = group.sort_values(by=date_col, ascending=True)
+        
+        # ✅ FIX: Use original stock from SOURCE data (before filtering)
+        # This ensures correct allocation even if first row was filtered out
+        if item_key in original_stock_map:
+            original_stock = original_stock_map[item_key]
+        else:
+            # Fallback: read from group if not in map
+            original_stock = 0
+            if 'Stock Quantity' in group.columns:
+                stock_values = group['Stock Quantity'].dropna()
+                if len(stock_values) > 0:
+                    original_stock = float(stock_values.iloc[0])
         
         remaining_stock = original_stock
         
-        # Process each order for this item
-        for idx, row in group.iterrows():
+        # Convert group to list to identify last order
+        group_list = list(group.iterrows())
+        total_orders = len(group_list)
+        
+        # ✅ FIFO: Process each order for this item (oldest first)
+        for order_index, (idx, row) in enumerate(group_list):
+            is_last_order = (order_index == total_orders - 1)
+            
             # Get order quantity (PENDING QTY is priority - it's what still needs fulfilling)
             order_qty = 0
             if 'Pending Qty' in row.index:
@@ -727,8 +789,12 @@ def convert_to_master_file(source_df, filters=None):
             elif 'Order Qty' in row.index:
                 order_qty = float(row['Order Qty']) if pd.notna(row['Order Qty']) else 0
             
-            # Calculate allocated stock for this order
-            available_for_order = min(remaining_stock, order_qty) if remaining_stock > 0 else 0
+            # ✅ LAST ORDER RULE: Allocate ALL remaining stock
+            if is_last_order:
+                available_for_order = remaining_stock  # ⭐ ALL remaining stock
+            else:
+                # NON-LAST: Take only what's needed (FIFO)
+                available_for_order = min(remaining_stock, order_qty) if remaining_stock > 0 else 0
             
             # Create row copy with tracking columns
             row_copy = row.copy()
@@ -736,7 +802,7 @@ def convert_to_master_file(source_df, filters=None):
             # Add tracking columns
             row_copy['Original Stock'] = original_stock
             row_copy['Allocated Stock'] = available_for_order
-            row_copy['Stock After Order'] = max(0, remaining_stock - order_qty)
+            row_copy['Stock After Order'] = max(0, remaining_stock - available_for_order)
             
             # Update Stock Quantity to show allocated stock
             if 'Stock Quantity' in row_copy.index:
@@ -745,25 +811,34 @@ def convert_to_master_file(source_df, filters=None):
             result_rows.append(row_copy)
             
             # Deduct from remaining stock for next order
-            remaining_stock = max(0, remaining_stock - order_qty)
+            remaining_stock = max(0, remaining_stock - available_for_order)
     
     df_master = pd.DataFrame(result_rows)
     df_master = df_master.reset_index(drop=True)
     
     # ========================================================================
-    # STEP 6: ADD PRODUCTION COLUMN (PRODUCTION = Pending Qty - Stock Quantity)
+    # STEP 5: ADD PRODUCTION COLUMN (PRODUCTION = Pending Qty - Stock Quantity)
     # ========================================================================
     # PRODUCTION shows the production gap:
-    # - PRODUCTION = 0: Fully covered by allocated stock
+    # - PRODUCTION = 0: Fully covered by allocated stock (or last order with excess)
     # - PRODUCTION > 0: Need to produce X units to cover order
     if 'Pending Qty' in df_master.columns and 'Stock Quantity' in df_master.columns:
         df_master['PRODUCTION'] = df_master['Pending Qty'] - df_master['Stock Quantity']
+        # ✅ Cap PRODUCTION at 0 (can't have negative production)
+        # For last orders with excess stock, PRODUCTION = 0
+        df_master['PRODUCTION'] = df_master['PRODUCTION'].apply(lambda x: max(0, x))
     else:
         df_master['PRODUCTION'] = 0
     
     # ========================================================================
-    # STEP 7: SELECT ONLY REQUIRED 19 COLUMNS (MATCH TARGET FILE STRUCTURE)
+    # STEP 6: SELECT ONLY REQUIRED 19 COLUMNS (MATCH TARGET FILE STRUCTURE)
     # ========================================================================
+    # ✅ Fix: Replace datetime column with display format for output
+    if date_col and date_col_display and date_col_display in df_master.columns:
+        # Use the display format (DD-MM-YYYY) for output
+        df_master[date_col] = df_master[date_col_display]
+        df_master = df_master.drop(columns=[date_col_display])
+    
     # Keep ONLY these 19 columns for final master file output
     # (Internal tracking columns are calculated but not exported)
     required_columns = [
@@ -935,6 +1010,18 @@ def apply_column_set(sheet_df, num_cols):
 def generate_sheet_with_filter(master_df, template_config):
     try:
         sheet_df = master_df.copy()
+        
+        # ✅ Apply template pre-processing filters FIRST (Category, Remarks, etc.)
+        if 'pre_processing_filters' in template_config and template_config['pre_processing_filters']:
+            for filter_rule in template_config['pre_processing_filters']:
+                column = filter_rule.get('column')
+                contains_text = filter_rule.get('contains', '').strip()
+                enabled = filter_rule.get('enabled', True)
+                
+                if enabled and column and contains_text and column in sheet_df.columns:
+                    # Remove rows WHERE column CONTAINS the text
+                    mask = sheet_df[column].astype(str).str.contains(contains_text, case=False, na=False)
+                    sheet_df = sheet_df[~mask]  # Keep rows that DON'T match
         
         # Apply filter
         if template_config['filter_type'] == 'remarks':
