@@ -54,7 +54,7 @@ def check_login():
 
 def login_page():
     st.title("🔐 Login Required")
-    st.markdown("Excel Master & Template Exporter v4.0")
+    st.markdown("Excel Master & Template Exporter v4.9")
     
     with st.form("login_form"):
         username = st.text_input("Username")
@@ -1293,7 +1293,7 @@ show_system_status()
 col_title, col_pull = st.columns([8, 2])
 
 with col_title:
-    st.title("📊 Excel Master & Template Exporter v4.7")
+    st.title("📊 Excel Master & Template Exporter v4.8")
 
 with col_pull:
     st.markdown("<br>", unsafe_allow_html=True)
