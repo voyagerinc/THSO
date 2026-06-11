@@ -30,7 +30,7 @@ import time
 # ============================================================================
 # PAGE CONFIG
 # ============================================================================
-st.set_page_config(page_title="Excel Master & Template Exporter v4.7", layout="wide")
+st.set_page_config(page_title="Excel Master & Template Exporter v4.8", layout="wide")
 
 # ============================================================================
 # GITHUB CONFIG
