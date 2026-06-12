@@ -26,11 +26,176 @@ import zipfile
 import subprocess
 import sys
 import time
+import hashlib
 
 # ============================================================================
 # PAGE CONFIG
 # ============================================================================
 st.set_page_config(page_title="Excel Master & Template Exporter v4.8", layout="wide")
+
+# ============================================================================
+# AUTO-VERSION MANAGEMENT (NEW FEATURE)
+# ============================================================================
+VERSION_FILE = "version.json"
+CHANGELOG_FILE = "changelog.json"
+
+def get_file_hash(file_path):
+    """Get SHA256 hash of a file"""
+    try:
+        if not os.path.exists(file_path):
+            return None
+        sha256_hash = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+    except:
+        return None
+
+def load_version_info():
+    """Load version info from file"""
+    try:
+        if os.path.exists(VERSION_FILE):
+            with open(VERSION_FILE, 'r') as f:
+                return json.load(f)
+    except:
+        pass
+    
+    return {
+        "major": 4,
+        "minor": 8,
+        "patch": 0,
+        "build": 1,
+        "created": datetime.now().isoformat(),
+        "last_modified": datetime.now().isoformat(),
+        "app_hash": get_file_hash(__file__),
+        "config_hash": None,
+        "templates_hash": None
+    }
+
+def save_version_info(version_info):
+    """Save version info"""
+    try:
+        with open(VERSION_FILE, 'w') as f:
+            json.dump(version_info, f, indent=2)
+        return True
+    except:
+        return False
+
+def load_changelog():
+    """Load changelog"""
+    try:
+        if os.path.exists(CHANGELOG_FILE):
+            with open(CHANGELOG_FILE, 'r') as f:
+                return json.load(f)
+    except:
+        pass
+    return []
+
+def save_changelog(changelog):
+    """Save changelog"""
+    try:
+        with open(CHANGELOG_FILE, 'w') as f:
+            json.dump(changelog, f, indent=2)
+        return True
+    except:
+        return False
+
+def add_changelog_entry(change_type, description, details=""):
+    """Add changelog entry"""
+    try:
+        changelog = load_changelog()
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "type": change_type,
+            "description": description,
+            "details": details,
+            "version": get_version_string(),
+            "user": "system"
+        }
+        changelog.insert(0, entry)
+        changelog = changelog[:100]
+        save_changelog(changelog)
+    except:
+        pass
+
+def get_version_string():
+    """Get version string"""
+    try:
+        if 'version_info' in st.session_state:
+            v = st.session_state.version_info
+            return f"v{v['major']}.{v['minor']}.{v['patch']}.{v['build']}"
+    except:
+        pass
+    return "v4.8.0.1"
+
+def check_for_changes():
+    """Check if files changed"""
+    try:
+        if 'version_info' not in st.session_state:
+            return False, []
+        
+        version_info = st.session_state.version_info
+        changed = False
+        change_list = []
+        
+        # Check app.py
+        app_hash = get_file_hash(__file__)
+        if app_hash and app_hash != version_info.get('app_hash'):
+            changed = True
+            change_list.append("App code modified")
+            version_info['app_hash'] = app_hash
+        
+        # Check templates
+        if os.path.exists(TEMPLATES_FILE):
+            template_hash = get_file_hash(TEMPLATES_FILE)
+            if template_hash and template_hash != version_info.get('templates_hash'):
+                changed = True
+                change_list.append("Templates modified")
+                version_info['templates_hash'] = template_hash
+        
+        # Check config
+        if os.path.exists(CUSTOM_TEMPLATES_FILE):
+            config_hash = get_file_hash(CUSTOM_TEMPLATES_FILE)
+            if config_hash and config_hash != version_info.get('config_hash'):
+                changed = True
+                change_list.append("Configuration modified")
+                version_info['config_hash'] = config_hash
+        
+        return changed, change_list
+    except:
+        return False, []
+
+def increment_version(version_info, change_list):
+    """Increment version"""
+    try:
+        if change_list:
+            if any('code' in c.lower() for c in change_list):
+                version_info['minor'] += 1
+                version_info['patch'] = 0
+                version_info['build'] = 1
+            else:
+                version_info['patch'] += 1
+                version_info['build'] = 1
+        else:
+            version_info['build'] += 1
+        
+        version_info['last_modified'] = datetime.now().isoformat()
+        save_version_info(version_info)
+    except:
+        pass
+
+# Initialize version info
+if 'version_info' not in st.session_state:
+    st.session_state.version_info = load_version_info()
+
+# Check for changes
+try:
+    changed, change_list = check_for_changes()
+    if changed:
+        increment_version(st.session_state.version_info, change_list)
+except:
+    pass
 
 # ============================================================================
 # GITHUB CONFIG
@@ -1346,6 +1511,26 @@ with col_pull:
     else:
         if st.button("🔄 RESTART", use_container_width=True, key="top_restart_only"):
             restart_application()
+
+# Version badge (NEW FEATURE)
+with st.expander(f"ℹ️ **Version {get_version_string()} | Build {st.session_state.version_info['build']}**", expanded=False):
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Version", f"{st.session_state.version_info['major']}.{st.session_state.version_info['minor']}.{st.session_state.version_info['patch']}")
+    with col2:
+        st.metric("Build", st.session_state.version_info['build'])
+    with col3:
+        modified = datetime.fromisoformat(st.session_state.version_info['last_modified'])
+        st.metric("Last Modified", modified.strftime("%d %b %y"))
+    with col4:
+        st.metric("Branch", get_current_branch())
+    
+    st.divider()
+    st.markdown("**Recent Changes:**")
+    changelog = load_changelog()[:5]
+    for entry in changelog:
+        ts = datetime.fromisoformat(entry['timestamp']).strftime("%Y-%m-%d %H:%M")
+        st.caption(f"🔹 {entry['description']}\n_{ts}_")
 
 # Show GitHub Dashboard if status button clicked
 if st.session_state.get('show_git_status', False) and GITHUB_CONFIG['enabled']:
