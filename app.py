@@ -1498,19 +1498,81 @@ def create_workbook(master_df, sheet_configs, sheet_names_to_include=None):
 show_system_status()
 
 # Create layout with title and button
-col_title, col_pull = st.columns([8, 2])
+col_title, col_status, col_pull = st.columns([6, 2, 2])
 
 with col_title:
     st.title("📊 Excel Master & Template Exporter v4.8")
 
+with col_status:
+    st.markdown("<br>", unsafe_allow_html=True)
+    # Display last date/time on right side
+    v = st.session_state.version_info
+    if 'last_modified' in v:
+        try:
+            last_mod = datetime.fromisoformat(v['last_modified'])
+            st.metric("📅 Last Update", last_mod.strftime("%d/%m/%y\n%H:%M"))
+        except:
+            st.metric("📅 Last Update", "N/A")
+    else:
+        st.metric("📅 Last Update", "N/A")
+
 with col_pull:
     st.markdown("<br>", unsafe_allow_html=True)
-    if GITHUB_CONFIG['enabled']:
-        if st.button("🚀 PULL &\nRESTART", use_container_width=True, key="top_pull_restart"):
-            pull_and_restart()
-    else:
-        if st.button("🔄 RESTART", use_container_width=True, key="top_restart_only"):
-            restart_application()
+    # Git Pull + Restart button (MAIN BUTTON)
+    if st.button("🔄 PULL &\nRESTART", use_container_width=True, key="top_pull_restart", type="primary"):
+        try:
+            st.info("⏳ Starting Git pull and restart sequence...")
+            
+            # Step 1: Sync with GitHub
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            status_text.text("📥 Pulling from GitHub...")
+            progress_bar.progress(33)
+            
+            fetch_result = subprocess.run(
+                ['git', 'fetch', 'origin', GITHUB_CONFIG['branch']],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            pull_result = subprocess.run(
+                ['git', 'pull', 'origin', GITHUB_CONFIG['branch']],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            progress_bar.progress(66)
+            status_text.text("✅ Code updated! Restarting Streamlit...")
+            
+            # Update version info
+            st.session_state.version_info['last_modified'] = datetime.now().isoformat()
+            save_version_info(st.session_state.version_info)
+            add_changelog_entry("git_pull_restart", "Git pull + Streamlit restart", "Full deployment")
+            
+            progress_bar.progress(100)
+            st.success("✅ Deployment complete! Restarting...")
+            st.balloons()
+            
+            time.sleep(2)
+            st.rerun()
+        except Exception as e:
+            st.error(f"❌ Error: {str(e)}")
+
+# ============================================================================
+# Optional: Also keep the simple restart button
+# ============================================================================
+show_restart_only = st.sidebar.checkbox("Show Restart Only Button", value=False)
+if show_restart_only:
+    if st.sidebar.button("🔁 Restart Only", use_container_width=True):
+        st.sidebar.info("Restarting Streamlit...")
+        st.session_state.version_info['last_modified'] = datetime.now().isoformat()
+        save_version_info(st.session_state.version_info)
+        add_changelog_entry("restart", "Streamlit restarted", "Manual restart")
+        time.sleep(2)
+        st.rerun()
 
 # Version badge (NEW FEATURE)
 with st.expander(f"ℹ️ **Version {get_version_string()} | Build {st.session_state.version_info['build']}**", expanded=False):
@@ -1543,7 +1605,7 @@ if st.session_state.get('show_git_status', False) and GITHUB_CONFIG['enabled']:
 
 st.markdown("**10 Sheets | Combined + Separate Files | Template Management**")
 
-tab1, tab2, tab3 = st.tabs(["📥 Generate Sheets", "⚙️ Sheet Templates", "📁 Custom Templates"])
+tab1, tab2, tab3, tab_admin = st.tabs(["📥 Generate Sheets", "⚙️ Sheet Templates", "📁 Custom Templates", "🛠️ Admin & Deploy"])
 
 # ============================================================================
 # TAB 1: GENERATE SHEETS
@@ -2039,6 +2101,230 @@ with tab3:
                         del st.session_state['custom_templates'][selected]
                         save_custom_templates(st.session_state['custom_templates'])
                         st.rerun()
+
+# ============================================================================
+# TAB 4: ADMIN & DEPLOY (NEW)
+# ============================================================================
+with tab_admin:
+    st.subheader("🛠️ Admin & Deployment Panel")
+    st.info("⚠️ Operations that affect the running application")
+    
+    col_deploy1, col_deploy2 = st.columns([1, 1])
+    
+    with col_deploy1:
+        st.markdown("### 🚀 Deployment Operations")
+        
+        # Main: Git Pull + Restart
+        if st.button("🔄 Git Pull + Streamlit Restart", use_container_width=True, type="primary", key="admin_pull_restart"):
+            try:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                status_text.text("📥 Step 1: Pulling from GitHub...")
+                progress_bar.progress(25)
+                
+                fetch_result = subprocess.run(
+                    ['git', 'fetch', 'origin', GITHUB_CONFIG['branch']],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                
+                progress_bar.progress(50)
+                status_text.text("📥 Step 2: Pulling latest changes...")
+                
+                pull_result = subprocess.run(
+                    ['git', 'pull', 'origin', GITHUB_CONFIG['branch']],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                
+                progress_bar.progress(75)
+                status_text.text("✅ Code updated! Restarting Streamlit...")
+                
+                # Update version
+                st.session_state.version_info['last_modified'] = datetime.now().isoformat()
+                save_version_info(st.session_state.version_info)
+                add_changelog_entry("git_pull_restart", "Git pull + Streamlit restart")
+                
+                progress_bar.progress(100)
+                st.success("✅ Deployment Complete!")
+                st.balloons()
+                
+                time.sleep(2)
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+        
+        st.divider()
+        
+        # Git Pull Only
+        if st.button("📥 Git Pull Only", use_container_width=True, key="admin_pull_only"):
+            try:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                status_text.text("📥 Pulling from GitHub...")
+                progress_bar.progress(50)
+                
+                result = subprocess.run(
+                    ['git', 'pull', 'origin', GITHUB_CONFIG['branch']],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                
+                progress_bar.progress(100)
+                
+                if result.returncode == 0:
+                    st.session_state.version_info['last_modified'] = datetime.now().isoformat()
+                    save_version_info(st.session_state.version_info)
+                    add_changelog_entry("git_pull", "Git pull completed")
+                    st.success("✅ Git pull successful! (App not restarted)")
+                    st.balloons()
+                else:
+                    st.error(f"❌ Git pull failed")
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+        
+        # Restart Only
+        if st.button("🔁 Restart Streamlit Only", use_container_width=True, key="admin_restart_only"):
+            try:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                status_text.text("🔄 Preparing restart...")
+                progress_bar.progress(50)
+                
+                st.session_state.version_info['last_modified'] = datetime.now().isoformat()
+                save_version_info(st.session_state.version_info)
+                add_changelog_entry("restart", "Streamlit restarted")
+                
+                status_text.text("🚀 Restarting...")
+                progress_bar.progress(100)
+                
+                st.success("✅ Restarting Streamlit...")
+                st.balloons()
+                
+                time.sleep(2)
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+        
+        st.divider()
+        
+        # Push to GitHub
+        st.markdown("### 📤 Push Changes")
+        push_msg = st.text_input("Commit message", value="Update from Excel Exporter")
+        
+        if st.button("📤 Push to GitHub", use_container_width=True, key="admin_push"):
+            try:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                status_text.text("📝 Staging changes...")
+                progress_bar.progress(25)
+                
+                subprocess.run(['git', 'add', '.'], capture_output=True, timeout=10)
+                
+                progress_bar.progress(50)
+                status_text.text("💾 Creating commit...")
+                
+                subprocess.run(['git', 'commit', '-m', push_msg],
+                             capture_output=True, timeout=10)
+                
+                progress_bar.progress(75)
+                status_text.text("📤 Pushing to GitHub...")
+                
+                result = subprocess.run(
+                    ['git', 'push', 'origin', GITHUB_CONFIG['branch']],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                
+                progress_bar.progress(100)
+                
+                if result.returncode == 0:
+                    st.session_state.version_info['last_modified'] = datetime.now().isoformat()
+                    save_version_info(st.session_state.version_info)
+                    add_changelog_entry("git_push", f"Pushed to GitHub: {push_msg}")
+                    st.success("✅ Pushed to GitHub!")
+                    st.balloons()
+                else:
+                    st.warning("⚠️ Push completed with warnings")
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+    
+    with col_deploy2:
+        st.markdown("### 📊 Application Status")
+        
+        # Version Information
+        st.markdown("**Version Information:**")
+        v = st.session_state.version_info
+        
+        st.metric("Version", f"{v['major']}.{v['minor']}.{v['patch']}")
+        st.metric("Build", v['build'])
+        
+        try:
+            created = datetime.fromisoformat(v['created'])
+            st.caption(f"Created: {created.strftime('%Y-%m-%d %H:%M:%S')}")
+        except:
+            st.caption("Created: N/A")
+        
+        try:
+            modified = datetime.fromisoformat(v['last_modified'])
+            st.caption(f"Modified: {modified.strftime('%Y-%m-%d %H:%M:%S')}")
+        except:
+            st.caption("Modified: N/A")
+        
+        st.divider()
+        
+        # Git Status
+        st.markdown("**Git Status:**")
+        try:
+            branch = get_current_branch()
+            st.caption(f"🔗 Branch: {branch}")
+        except:
+            st.caption("🔗 Branch: unknown")
+        
+        try:
+            commit = get_current_commit()
+            st.caption(f"📌 Commit: {commit}")
+        except:
+            st.caption("📌 Commit: unknown")
+        
+        changes = get_uncommitted_changes()
+        if changes > 0:
+            st.warning(f"⚠️ {changes} file(s) with uncommitted changes")
+        else:
+            st.success("✅ Working directory is clean")
+        
+        st.divider()
+        
+        # Changelog
+        st.markdown("**Changelog (Last 10):**")
+        changelog = load_changelog()[:10]
+        if changelog:
+            for entry in changelog:
+                try:
+                    ts = datetime.fromisoformat(entry['timestamp']).strftime("%H:%M:%S")
+                    type_emoji = {
+                        "git_pull": "📥",
+                        "git_push": "📤",
+                        "restart": "🔁",
+                        "git_pull_restart": "🚀",
+                        "template_update": "📋",
+                        "custom_template_update": "✨",
+                        "export": "📊"
+                    }.get(entry.get('type', 'other'), "📌")
+                    
+                    st.caption(f"{type_emoji} {entry['description']}\n_{entry['version']} @ {ts}_")
+                except:
+                    st.caption(entry.get('description', 'Unknown'))
+        else:
+            st.caption("No changes logged yet")
 
 # Footer
 st.divider()
