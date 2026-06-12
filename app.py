@@ -508,17 +508,16 @@ DEFAULT_SHEETS = {
         'description': 'AVS with Sales Person subtotals (excluding Hold & Sample)'
     },
     'NITIN': {
-        'filter_type': 'line_grouped',
-        'filter_value': 'LINE CC',
+        'filter_type': 'none',
         'exclude_remarks': ['Hold', 'SAMPLE'],
         'columns': 13,
         'has_subtotals': False,
-        'group_by': 'Line',
         'enabled': True,
-        'description': 'LINE CC (excluding Hold & Sample & Finished Good)',
-        # ✅ PRE-PROCESSING FILTERS for Nitin
+        'description': 'Semi Finished Good only (excluding Raw Material, Finished Good, Hold & Sample)',
+        # ✅ PRE-PROCESSING FILTERS for Nitin - KEEP ONLY Semi Finished Good
         'pre_processing_filters': [
-            {'column': 'Category', 'contains': 'Finished Good', 'enabled': True},
+            {'column': 'Category', 'contains': '^Raw Material$', 'regex': True, 'enabled': True},
+            {'column': 'Category', 'contains': '^Finished Good$', 'regex': True, 'enabled': True},
             {'column': 'Remarks', 'contains': 'Sample', 'enabled': True},
             {'column': 'Remarks', 'contains': 'Hold', 'enabled': True}
         ]
@@ -852,6 +851,9 @@ def convert_to_master_file(source_df, filters=None):
     available_cols = [col for col in required_columns if col in df_master.columns]
     df_master = df_master[available_cols]
     
+    # ✅ Fill any remaining missing SO dates BEFORE returning master file
+    df_master = fill_missing_so_dates(df_master)
+    
     return df_master
 
 def create_master_file(source_df, filters=None):
@@ -889,10 +891,52 @@ def add_total_row(df, total_label="TOTAL"):
             total[col] = total_label if col == 'Item Name' or col == 'Item Code' else ''
     return pd.DataFrame([total])
 
+# ============================================================================
+# ✅ FILL MISSING SO DATE VALUES - CRITICAL FIX
+# ============================================================================
+def fill_missing_so_dates(df):
+    """
+    Fill missing SO Date values intelligently by:
+    1. Matching SO NO. across rows
+    2. Forward/backward fill for same SO NO.
+    3. Global fill for any remaining nulls
+    
+    This ensures ALL rows have SO Date populated.
+    """
+    if 'SO Date' not in df.columns:
+        return df
+    
+    df = df.copy()
+    
+    # STEP 1: Map SO NO to its SO Date (first non-null per SO NO)
+    if 'SO NO.' in df.columns:
+        so_date_map = {}
+        for so_no, group in df.groupby('SO NO.', sort=False):
+            valid_dates = group['SO Date'].dropna()
+            if len(valid_dates) > 0:
+                so_date_map[str(so_no).strip()] = valid_dates.iloc[0]
+        
+        # STEP 2: Fill using SO NO. map
+        def fill_from_map(row):
+            if pd.isna(row['SO Date']) or str(row['SO Date']).strip() == '':
+                so_no = str(row['SO NO.']).strip() if pd.notna(row['SO NO.']) else ''
+                return so_date_map.get(so_no, row['SO Date'])
+            return row['SO Date']
+        
+        df['SO Date'] = df.apply(fill_from_map, axis=1)
+    
+    # STEP 3: Forward/backward fill for remaining nulls
+    df['SO Date'] = df['SO Date'].fillna(method='ffill').fillna(method='bfill')
+    
+    return df
+
 def sort_by_date(df):
     try:
         # Create a copy to avoid modifying original during sorting
         df_sort = df.copy()
+        
+        # ✅ Fill missing SO dates BEFORE sorting
+        df_sort = fill_missing_so_dates(df_sort)
         
         if 'SO Date' in df_sort.columns:
             # Convert strings back to datetime for sorting only
@@ -920,6 +964,9 @@ def sort_by_delivery_date_desc(df):
     """Sort by Delivery Date in descending order (newest first)"""
     try:
         df_sort = df.copy()
+        
+        # ✅ Fill missing SO dates
+        df_sort = fill_missing_so_dates(df_sort)
         
         if 'Delivery Date' in df_sort.columns:
             # Convert strings back to datetime for sorting only
@@ -1011,16 +1058,23 @@ def generate_sheet_with_filter(master_df, template_config):
     try:
         sheet_df = master_df.copy()
         
+        # ✅ Fill missing SO dates FIRST - before any filtering
+        sheet_df = fill_missing_so_dates(sheet_df)
+        
         # ✅ Apply template pre-processing filters FIRST (Category, Remarks, etc.)
         if 'pre_processing_filters' in template_config and template_config['pre_processing_filters']:
             for filter_rule in template_config['pre_processing_filters']:
                 column = filter_rule.get('column')
                 contains_text = filter_rule.get('contains', '').strip()
                 enabled = filter_rule.get('enabled', True)
+                use_regex = filter_rule.get('regex', False)
                 
                 if enabled and column and contains_text and column in sheet_df.columns:
-                    # Remove rows WHERE column CONTAINS the text
-                    mask = sheet_df[column].astype(str).str.contains(contains_text, case=False, na=False)
+                    # Remove rows WHERE column CONTAINS the text (or matches regex if enabled)
+                    if use_regex:
+                        mask = sheet_df[column].astype(str).str.contains(contains_text, case=False, na=False, regex=True)
+                    else:
+                        mask = sheet_df[column].astype(str).str.contains(contains_text, case=False, na=False)
                     sheet_df = sheet_df[~mask]  # Keep rows that DON'T match
         
         # Apply filter
@@ -1187,19 +1241,8 @@ def create_workbook(master_df, sheet_configs, sheet_names_to_include=None):
                 continue
             
             try:
-                # Generate sheet data
-                if config['filter_type'] == 'none':
-                    sheet_df = master_df.copy()
-                    # Apply line-wise sorting and subtotals for Master File
-                    if 'Line' in sheet_df.columns:
-                        sheet_df = apply_line_wise_subtotals_only(sheet_df)
-                    else:
-                        sheet_df = sort_by_delivery_date_desc(sheet_df)
-                        if len(sheet_df) > 0:
-                            total_row = add_total_row(sheet_df, "GRAND TOTAL")
-                            sheet_df = pd.concat([sheet_df, total_row], ignore_index=True)
-                else:
-                    sheet_df = generate_sheet_with_filter(master_df, config)
+                # Generate sheet data - Always use generate_sheet_with_filter to apply pre-processing filters
+                sheet_df = generate_sheet_with_filter(master_df, config)
                 
                 if sheet_df is None or len(sheet_df) == 0:
                     report['issues'].append(f"{sheet_name}: No data after filtering")
