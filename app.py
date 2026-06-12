@@ -748,10 +748,15 @@ DEFAULT_SHEETS = {
 # TEMPLATE MANAGEMENT
 # ============================================================================
 def load_sheet_templates():
+    """Load sheet templates from file, or use defaults with any saved custom ones merged"""
     if os.path.exists(TEMPLATES_FILE):
         try:
             with open(TEMPLATES_FILE, 'r') as f:
-                return json.load(f)
+                saved_templates = json.load(f)
+                # Merge with defaults to ensure all templates are present
+                merged = DEFAULT_SHEETS.copy()
+                merged.update(saved_templates)
+                return merged
         except:
             return DEFAULT_SHEETS.copy()
     return DEFAULT_SHEETS.copy()
