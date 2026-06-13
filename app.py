@@ -897,11 +897,11 @@ def convert_to_master_file(source_df, filters=None):
         # ✅ FIX: Keep dates as datetime objects for CORRECT SORTING
         # Convert to datetime (auto-detect format)
         try:
-            df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+            df[date_col] = pd.to_datetime(df[date_col], format='%d-%m-%Y', errors='coerce', dayfirst=True)
         except:
             # If auto-detect fails, try DD-MM-YYYY format
             try:
-                df[date_col] = pd.to_datetime(df[date_col], format='%d-%m-%Y', errors='coerce')
+                df[date_col] = pd.to_datetime(df[date_col], format='%d-%m-%Y', errors='coerce', dayfirst=True)
             except:
                 pass  # Keep original if conversion fails
         
@@ -1062,41 +1062,84 @@ def add_total_row(df, total_label="TOTAL"):
     return pd.DataFrame([total])
 
 # ============================================================================
-# ✅ FILL MISSING SO DATE VALUES - CRITICAL FIX
+# ✅ FILL MISSING SO DATE VALUES - SENIOR DEVELOPER FIX
 # ============================================================================
 def fill_missing_so_dates(df):
     """
-    Fill missing SO Date values intelligently by:
-    1. Matching SO NO. across rows
-    2. Forward/backward fill for same SO NO.
-    3. Global fill for any remaining nulls
+    Fill missing SO Date values intelligently:
+    1. Identify subtotal rows (skip them - don't fill SO Date)
+    2. Map SO NO to SO Date for actual data rows
+    3. Use fallback to Order Date, Delivery Date, etc.
+    4. Forward/backward fill for same SO NO
+    5. Fill remaining nulls intelligently
     
-    This ensures ALL rows have SO Date populated.
+    CRITICAL: Subtotal rows MUST remain with empty SO Date but are formatted blue
+    Data rows MUST have SO Date populated
     """
     if 'SO Date' not in df.columns:
         return df
     
     df = df.copy()
     
-    # STEP 1: Map SO NO to its SO Date (first non-null per SO NO)
+    # IDENTIFY SUBTOTAL ROWS (mark them so we can skip them)
+    subtotal_mask = df.apply(lambda row: 
+        any('Subtotal' in str(val) for val in row.values if pd.notna(val)), 
+        axis=1
+    )
+    
+    # STEP 1: Map SO NO to its SO Date (only from DATA rows, not subtotals)
     if 'SO NO.' in df.columns:
         so_date_map = {}
         for so_no, group in df.groupby('SO NO.', sort=False):
-            valid_dates = group['SO Date'].dropna()
-            if len(valid_dates) > 0:
-                so_date_map[str(so_no).strip()] = valid_dates.iloc[0]
+            if pd.notna(so_no):  # Only map valid SO NOs
+                # Exclude subtotal rows when creating map
+                data_group = group[~subtotal_mask.loc[group.index]]
+                valid_dates = data_group['SO Date'].dropna()
+                if len(valid_dates) > 0:
+                    so_date_map[str(so_no).strip()] = valid_dates.iloc[0]
         
-        # STEP 2: Fill using SO NO. map
-        def fill_from_map(row):
+        # STEP 2: Fill using SO NO map (but NOT subtotal rows)
+        def fill_from_map(idx, row):
+            # NEVER fill SO Date for subtotal rows
+            if subtotal_mask.iloc[idx]:
+                return row['SO Date']  # Keep empty
+            
             if pd.isna(row['SO Date']) or str(row['SO Date']).strip() == '':
                 so_no = str(row['SO NO.']).strip() if pd.notna(row['SO NO.']) else ''
-                return so_date_map.get(so_no, row['SO Date'])
+                if so_no and so_no != 'nan':
+                    return so_date_map.get(so_no, row['SO Date'])
             return row['SO Date']
         
-        df['SO Date'] = df.apply(fill_from_map, axis=1)
+        df['SO Date'] = df.apply(lambda row: fill_from_map(row.name, row), axis=1)
     
-    # STEP 3: Forward/backward fill for remaining nulls
-    df['SO Date'] = df['SO Date'].fillna(method='ffill').fillna(method='bfill')
+    # STEP 3: Use fallback columns for data rows only
+    fallback_cols = ['Order Date', 'Delivery Date', "Party's Order Date", 'Date']
+    for col in fallback_cols:
+        if col in df.columns:
+            # Only fill data rows, skip subtotals
+            mask = (~subtotal_mask) & ((df['SO Date'].isna()) | (df['SO Date'] == ''))
+            if mask.any():
+                df.loc[mask, 'SO Date'] = df.loc[mask, col].fillna(df.loc[mask, 'SO Date'])
+    
+    # STEP 4: Forward/backward fill (data rows only)
+    # Preserve original subtotal row positions
+    data_indices = df.index[~subtotal_mask].tolist()
+    df.loc[data_indices, 'SO Date'] = df.loc[data_indices, 'SO Date'].ffill().bfill()
+    
+    # STEP 5: Fill remaining blanks by looking backward (data rows only)
+    for idx in df.index[~subtotal_mask]:
+        if pd.isna(df.at[idx, 'SO Date']):
+            # Look backward for previous non-null SO Date (from data rows)
+            for prev_idx in range(idx-1, -1, -1):
+                if not subtotal_mask.iloc[prev_idx] and pd.notna(df.at[prev_idx, 'SO Date']):
+                    df.at[idx, 'SO Date'] = df.at[prev_idx, 'SO Date']
+                    break
+    
+    # STEP 6: Final forward fill (data rows only)
+    df.loc[data_indices, 'SO Date'] = df.loc[data_indices, 'SO Date'].ffill()
+    
+    # VERIFY: Subtotal rows must have empty SO Date
+    df.loc[subtotal_mask, 'SO Date'] = ''
     
     return df
 
@@ -1111,7 +1154,7 @@ def sort_by_date(df):
         if 'SO Date' in df_sort.columns:
             # Convert strings back to datetime for sorting only
             try:
-                df_sort['_sort_key'] = pd.to_datetime(df_sort['SO Date'], format='%d-%m-%Y', errors='coerce')
+                df_sort['_sort_key'] = pd.to_datetime(df_sort['SO Date'], format='%d-%m-%Y', errors='coerce', dayfirst=True)
                 df_sort = df_sort.sort_values('_sort_key', ascending=False, na_position='last')
                 df_sort = df_sort.drop('_sort_key', axis=1)
             except:
@@ -1119,7 +1162,7 @@ def sort_by_date(df):
         elif 'Delivery Date' in df_sort.columns:
             # Convert strings back to datetime for sorting only
             try:
-                df_sort['_sort_key'] = pd.to_datetime(df_sort['Delivery Date'], format='%d-%m-%Y', errors='coerce')
+                df_sort['_sort_key'] = pd.to_datetime(df_sort['Delivery Date'], format='%d-%m-%Y', errors='coerce', dayfirst=True)
                 df_sort = df_sort.sort_values('_sort_key', ascending=False, na_position='last')
                 df_sort = df_sort.drop('_sort_key', axis=1)
             except:
@@ -1141,7 +1184,7 @@ def sort_by_delivery_date_desc(df):
         if 'Delivery Date' in df_sort.columns:
             # Convert strings back to datetime for sorting only
             try:
-                df_sort['_sort_key'] = pd.to_datetime(df_sort['Delivery Date'], format='%d-%m-%Y', errors='coerce')
+                df_sort['_sort_key'] = pd.to_datetime(df_sort['Delivery Date'], format='%d-%m-%Y', errors='coerce', dayfirst=True)
                 df_sort = df_sort.sort_values('_sort_key', ascending=False, na_position='last')
                 df_sort = df_sort.drop('_sort_key', axis=1)
             except:
@@ -1149,7 +1192,7 @@ def sort_by_delivery_date_desc(df):
         elif 'SO Date' in df_sort.columns:
             # Fallback to SO Date if Delivery Date not available
             try:
-                df_sort['_sort_key'] = pd.to_datetime(df_sort['SO Date'], format='%d-%m-%Y', errors='coerce')
+                df_sort['_sort_key'] = pd.to_datetime(df_sort['SO Date'], format='%d-%m-%Y', errors='coerce', dayfirst=True)
                 df_sort = df_sort.sort_values('_sort_key', ascending=False, na_position='last')
                 df_sort = df_sort.drop('_sort_key', axis=1)
             except:
@@ -1350,7 +1393,7 @@ def format_date_columns(df):
         if col in df.columns:
             try:
                 # Convert to datetime if not already
-                df[col] = pd.to_datetime(df[col], errors='coerce')
+                df[col] = pd.to_datetime(df[col], format='%d-%m-%Y', errors='coerce', dayfirst=True)
                 # Format as DD-MM-YYYY string
                 df[col] = df[col].dt.strftime('%d-%m-%Y')
             except:
