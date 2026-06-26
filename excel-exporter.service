@@ -1,0 +1,52 @@
+[Unit]
+Description=Excel Master Exporter - Streamlit Service
+Documentation=file:///path/to/VERSION_MANAGEMENT_GUIDE.md
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=streamlit
+Group=streamlit
+WorkingDirectory=/path/to/app/directory
+
+# Start command
+ExecStart=/usr/bin/streamlit run app.py \
+    --server.port=8501 \
+    --server.address=0.0.0.0 \
+    --server.headless=true \
+    --logger.level=info
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=600
+StartLimitBurst=3
+
+# Process management
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+Environment="HOME=/home/streamlit"
+
+# Security - optional but recommended
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/path/to/app/directory
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=streamlit-exporter
+
+# Resource limits - adjust as needed
+MemoryLimit=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

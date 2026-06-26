@@ -1,0 +1,95 @@
+{
+  "hold": {
+    "description": "Custom template: hold",
+    "columns": [
+      "Branch Name",
+      "SO NO.",
+      "SO Date",
+      "Party's Order No.",
+      "Party's Order Date",
+      "Party Name",
+      "Item Name",
+      "Item Code",
+      "Group",
+      "Category",
+      "Base Unit",
+      "Alt Unit",
+      "Order Qty",
+      "SO Freezed Qty",
+      "Order Alt Qty",
+      "Dispatch Qty",
+      "Dispatch Alt Qty",
+      "Pending Qty",
+      "Pending Alt Qty",
+      "Currency",
+      "Rate",
+      "Discount %",
+      "Discount Amount",
+      "Amount",
+      "soid",
+      "formid",
+      "Sales Branch Name",
+      "Employee Name",
+      "Remarks",
+      "Stock Quantity",
+      "Total Pending Freezed Stock",
+      "Free Stock",
+      "ETD",
+      "Order Remark",
+      "Monthly Avg. Demand",
+      "Valid From",
+      "Valid To",
+      "Due Date",
+      "Attribute No-4",
+      "Line",
+      "Delivery Date",
+      "Sales Person Name",
+      "PRODUCTION"
+    ],
+    "filter_groups": [
+      {
+        "conditions": [
+          {
+            "column": "Remarks",
+            "operator": "contains",
+            "value": "hold"
+          }
+        ],
+        "logic": "AND"
+      }
+    ],
+    "groups_logic": "AND",
+    "sort_by": []
+  },
+  "SAMPLE": {
+    "description": "Custom template: SAMPLE",
+    "columns": [
+      "SO NO.",
+      "SO Date",
+      "Party's Order No.",
+      "Item Name",
+      "Item Code",
+      "Order Qty",
+      "Sales Person Name"
+    ],
+    "filter_groups": [
+      {
+        "conditions": [
+          {
+            "column": "Remarks",
+            "operator": "contains",
+            "value": "SAMPLE"
+          }
+        ],
+        "logic": "AND"
+      }
+    ],
+    "groups_logic": "AND",
+    "sort_by": [
+      "SO NO."
+    ],
+    "subtotal_option": "Grand Total Only - Final sum only",
+    "group_by_col": null,
+    "group_by_line_col": null
+  }
+}
