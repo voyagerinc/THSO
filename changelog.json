@@ -1,5 +1,13 @@
 [
   {
+    "timestamp": "2026-06-26T07:08:57.895791",
+    "type": "git_push",
+    "description": "Pushed to GitHub: Update from Excel Exporter",
+    "details": "",
+    "version": "v5.1.0.1",
+    "user": "system"
+  },
+  {
     "timestamp": "2026-06-12T08:09:18.473527",
     "type": "git_pull_restart",
     "description": "Git pull + Streamlit restart",

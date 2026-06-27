@@ -1215,24 +1215,23 @@ def sort_by_delivery_date_desc(df):
     except:
         return df
 
-# ✅ FIX: Sort by SO Date ASCENDING (oldest first) within subtotal sections
-# NOTE: fill_missing_so_dates is intentionally NOT called here.
-# SO dates are already filled by the master file pipeline.
-# Calling fill_missing_so_dates on a group with non-contiguous indices
-# causes a silent IndexError that returns the original unsorted df.
+# ✅ Sort by Delivery Date ASCENDING (oldest first) within subtotal sections.
+# Falls back to SO Date if Delivery Date is not available.
+# NOTE: fill_missing_so_dates is intentionally NOT called here —
+# calling it on a group with non-contiguous indices causes a silent IndexError.
 def sort_by_so_date_asc(df):
-    """Sort by SO Date ascending (oldest first). Pure sort — no date filling."""
+    """Sort by Delivery Date ascending (oldest first). Pure sort — no date filling."""
     df_sort = df.copy()
 
-    if 'SO Date' in df_sort.columns:
+    if 'Delivery Date' in df_sort.columns:
         df_sort['_sort_key'] = pd.to_datetime(
-            df_sort['SO Date'], format='%d-%m-%Y', errors='coerce', dayfirst=True
+            df_sort['Delivery Date'], format='%d-%m-%Y', errors='coerce', dayfirst=True
         )
         df_sort = df_sort.sort_values('_sort_key', ascending=True, na_position='last')
         df_sort = df_sort.drop('_sort_key', axis=1)
-    elif 'Delivery Date' in df_sort.columns:
+    elif 'SO Date' in df_sort.columns:
         df_sort['_sort_key'] = pd.to_datetime(
-            df_sort['Delivery Date'], format='%d-%m-%Y', errors='coerce', dayfirst=True
+            df_sort['SO Date'], format='%d-%m-%Y', errors='coerce', dayfirst=True
         )
         df_sort = df_sort.sort_values('_sort_key', ascending=True, na_position='last')
         df_sort = df_sort.drop('_sort_key', axis=1)
