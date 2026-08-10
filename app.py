@@ -2063,6 +2063,12 @@ with tab2:
     with col_edit:
         st.markdown("### Edit Sheet")
 
+        # If an Edit button was clicked in the view column, apply it before
+        # instantiating the `edit_select` widget to avoid Streamlit's
+        # "cannot modify after widget instantiated" error.
+        if 'pending_edit' in st.session_state:
+            st.session_state['edit_select'] = st.session_state.pop('pending_edit')
+
         sheet_to_edit = st.selectbox(
             "Select Sheet to Edit",
             options=list(st.session_state['sheet_templates'].keys()),
@@ -2140,7 +2146,23 @@ with tab2:
         for name, config in st.session_state['sheet_templates'].items():
             status = "✅" if config.get('enabled', True) else "❌"
             st.write(f"{status} **{name}**")
-            st.caption(f"Filter: {config.get('filter_type')} | Cols: {config.get('columns', 13)}")
+
+            # Show full rule details for the template
+            filter_type = config.get('filter_type', 'none')
+            filter_value = config.get('filter_value', '')
+            if isinstance(filter_value, list):
+                filter_value_display = ', '.join(str(v) for v in filter_value)
+            else:
+                filter_value_display = str(filter_value)
+
+            st.caption(f"Filter: {filter_type} | Value: {filter_value_display} | Cols: {config.get('columns', 13)}")
+            st.write(f"Description: {config.get('description', '')} | Group by: {config.get('group_by', 'Line')} | Has subtotals: {config.get('has_subtotals', False)}")
+
+            # Provide quick-edit button that jumps to the Edit Sheet selector
+            if st.button(f"Edit {name}", key=f"edit_btn_{name}"):
+                st.session_state['pending_edit'] = name
+                st.rerun()
+
             st.divider()
 
 # ============================================================================
