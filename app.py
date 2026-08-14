@@ -21,6 +21,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 import io
 import json
 import os
+import copy
 from datetime import datetime
 import zipfile
 import subprocess
@@ -702,7 +703,7 @@ DEFAULT_SHEETS = {
     },
     'RAJESH': {
         'filter_type': 'line_grouped',
-        'filter_value': ['PHILIPS', 'PHILLIPS', 'OTG'],
+        'filter_value': ['PHILIPS', 'PHILLIPS', 'OTG', 'IMM.ROD'],
         'exclude_remarks': ['Hold', 'SAMPLE'],
         'columns': 13,
         'has_subtotals': True,
@@ -761,18 +762,24 @@ DEFAULT_SHEETS = {
 # TEMPLATE MANAGEMENT
 # ============================================================================
 def load_sheet_templates():
-    """Load sheet templates from file, or use defaults with any saved custom ones merged"""
+    """Load sheet templates from file, or use defaults with any saved custom ones merged.
+
+    Only templates that were actually edited & saved (present as keys in
+    sheet_templates.json) override the code default — every other template
+    keeps running its default rule untouched. Deep-copied so no template's
+    in-memory config can ever share a list/dict with DEFAULT_SHEETS and
+    accidentally leak a later edit into the default.
+    """
     if os.path.exists(TEMPLATES_FILE):
         try:
             with open(TEMPLATES_FILE, 'r') as f:
                 saved_templates = json.load(f)
-                # Merge with defaults to ensure all templates are present
-                merged = DEFAULT_SHEETS.copy()
-                merged.update(saved_templates)
+                merged = copy.deepcopy(DEFAULT_SHEETS)
+                merged.update(saved_templates)  # only overrides templates present in the saved file
                 return merged
         except:
-            return DEFAULT_SHEETS.copy()
-    return DEFAULT_SHEETS.copy()
+            return copy.deepcopy(DEFAULT_SHEETS)
+    return copy.deepcopy(DEFAULT_SHEETS)
 
 def save_sheet_templates(templates):
     try:
@@ -782,6 +789,52 @@ def save_sheet_templates(templates):
     except Exception as e:
         st.error(f"Error saving templates: {str(e)}")
         return False
+
+def describe_template_rule(config):
+    """Turn a template's raw config into a plain-English list of rules."""
+    lines = []
+
+    if not config.get('enabled', True):
+        lines.append("⚠️ Disabled — this sheet will be skipped when generating reports.")
+
+    ftype = config.get('filter_type', 'none')
+    fval = config.get('filter_value', '')
+    fvals = fval if isinstance(fval, list) else ([fval] if fval else [])
+
+    if ftype == 'none':
+        lines.append("✅ Starts with **all rows** (no primary include-filter).")
+    elif ftype == 'remarks':
+        lines.append(f"✅ Includes only rows where **Remarks** contains \"{fval}\".")
+    elif ftype == 'sales_person_single':
+        lines.append(f"✅ Includes only rows where **Sales Person Name** is exactly \"{fval}\".")
+    elif ftype == 'sales_person_grouped':
+        lines.append(f"✅ Includes only rows where **Sales Person Name** is exactly one of: {', '.join(fvals) if fvals else '(none set)'}.")
+    elif ftype == 'line_grouped':
+        lines.append(f"✅ Includes only rows where **Line** contains any of: {', '.join(fvals) if fvals else '(none set)'}. (Partial match — e.g. \"PHILIPS\" also matches \"PHILIPS-AIR FRYER\".)")
+    else:
+        lines.append(f"Filter type **{ftype}**, value: {fval}")
+
+    for rule in (config.get('pre_processing_filters') or []):
+        if not rule.get('enabled', True):
+            continue
+        col = rule.get('column', '?')
+        txt = rule.get('contains', '')
+        lines.append(f"❌ Excludes rows where **{col}** contains \"{txt}\".")
+
+    excl = config.get('exclude_remarks')
+    if excl:
+        excl_vals = excl if isinstance(excl, list) else [excl]
+        lines.append(f"❌ Excludes rows where **Remarks** contains any of: {', '.join(excl_vals)}.")
+
+    if config.get('has_subtotals'):
+        gb = config.get('group_by', 'Line')
+        lines.append(f"📊 Grouped by **{gb}**, with a subtotal after each group and a grand TOTAL row at the end.")
+    else:
+        lines.append("📊 No grouping — plain row list.")
+
+    lines.append(f"📋 Output columns: **{config.get('columns', 13)}-column** layout.")
+
+    return lines
 
 def load_custom_templates():
     if os.path.exists(CUSTOM_TEMPLATES_FILE):
@@ -1449,20 +1502,12 @@ def get_current_date():
     return datetime.now().strftime('%d-%m-%Y')
 
 def is_row_current_date(row_data, sheet_df, row_index):
-    """Check if a row's SO Date or Delivery Date matches today"""
+    """Check if a row's SO Date matches today"""
     today = get_current_date()
 
-    # Check SO Date column (most common)
+    # Check SO Date column only
     if 'SO Date' in sheet_df.columns:
         col_index = list(sheet_df.columns).index('SO Date')
-        if col_index < len(row_data):
-            cell_value = str(row_data[col_index]) if row_data[col_index] is not None else ""
-            if cell_value == today:
-                return True
-
-    # Check Delivery Date column
-    if 'Delivery Date' in sheet_df.columns:
-        col_index = list(sheet_df.columns).index('Delivery Date')
         if col_index < len(row_data):
             cell_value = str(row_data[col_index]) if row_data[col_index] is not None else ""
             if cell_value == today:
@@ -2084,13 +2129,20 @@ with tab2:
                 new_filter_type = st.selectbox(
                     "Filter Type",
                     options=['remarks', 'sales_person_single', 'sales_person_grouped', 'line_grouped', 'none'],
-                    index=['remarks', 'sales_person_single', 'sales_person_grouped', 'line_grouped', 'none'].index(config.get('filter_type', 'none'))
+                    index=['remarks', 'sales_person_single', 'sales_person_grouped', 'line_grouped', 'none'].index(config.get('filter_type', 'none')),
+                    key=f"filter_type_{sheet_to_edit}"
                 )
 
             with col_e2:
+                _current_filter_value = config.get('filter_value', '')
+                if isinstance(_current_filter_value, list):
+                    _filter_value_display = ', '.join(str(v) for v in _current_filter_value)
+                else:
+                    _filter_value_display = str(_current_filter_value)
                 new_filter_value = st.text_input(
                     "Filter Value (comma-separated for multiple)",
-                    value=str(config.get('filter_value', ''))
+                    value=_filter_value_display,
+                    key=f"filter_value_{sheet_to_edit}"
                 )
 
             col_e3, col_e4, col_e5 = st.columns(3)
@@ -2099,64 +2151,91 @@ with tab2:
                 new_columns = st.selectbox(
                     "Columns",
                     options=[13, 19],
-                    index=0 if config.get('columns', 13) == 13 else 1
+                    index=0 if config.get('columns', 13) == 13 else 1,
+                    key=f"columns_{sheet_to_edit}"
                 )
 
             with col_e4:
                 new_subtotals = st.checkbox(
                     "Has Subtotals",
-                    value=config.get('has_subtotals', False)
+                    value=config.get('has_subtotals', False),
+                    key=f"subtotals_{sheet_to_edit}"
                 )
 
             with col_e5:
                 new_enabled = st.checkbox(
                     "Enabled",
-                    value=config.get('enabled', True)
+                    value=config.get('enabled', True),
+                    key=f"enabled_{sheet_to_edit}"
                 )
 
             new_desc = st.text_input(
                 "Description",
-                value=config.get('description', '')
+                value=config.get('description', ''),
+                key=f"desc_{sheet_to_edit}"
             )
 
-            if st.button("💾 Save Changes", type="primary", use_container_width=True):
-                # Parse filter value
-                if ',' in str(new_filter_value):
-                    filter_val = [v.strip() for v in str(new_filter_value).split(',')]
-                else:
-                    filter_val = str(new_filter_value)
+            # Live preview of exactly what will be saved, so a bad paste is
+            # visible before it's written to disk.
+            if ',' in str(new_filter_value):
+                _preview_val = [v.strip().strip("[]'\"") for v in str(new_filter_value).split(',')]
+            else:
+                _preview_val = str(new_filter_value).strip().strip("[]'\"")
 
-                st.session_state['sheet_templates'][sheet_to_edit] = {
-                    'filter_type': new_filter_type,
-                    'filter_value': filter_val,
-                    'columns': new_columns,
-                    'has_subtotals': new_subtotals,
-                    'enabled': new_enabled,
-                    'description': new_desc,
-                    'group_by': config.get('group_by', 'Line')
-                }
+            _preview_config = {
+                **config,
+                'filter_type': new_filter_type,
+                'filter_value': _preview_val,
+                'columns': new_columns,
+                'has_subtotals': new_subtotals,
+                'enabled': new_enabled,
+            }
+            st.markdown("**📝 Rule preview — this is what will be saved:**")
+            for _line in describe_template_rule(_preview_config):
+                st.markdown(f"- {_line}")
 
-                save_sheet_templates(st.session_state['sheet_templates'])
-                st.success(f"✅ Updated {sheet_to_edit}!")
-                st.rerun()
+            col_save, col_reset = st.columns(2)
+
+            with col_save:
+                if st.button("💾 Save Changes", type="primary", use_container_width=True):
+                    filter_val = _preview_val
+
+                    st.session_state['sheet_templates'][sheet_to_edit] = {
+                        'filter_type': new_filter_type,
+                        'filter_value': filter_val,
+                        'columns': new_columns,
+                        'has_subtotals': new_subtotals,
+                        'enabled': new_enabled,
+                        'description': new_desc,
+                        'group_by': config.get('group_by', 'Line')
+                    }
+
+                    save_sheet_templates(st.session_state['sheet_templates'])
+                    st.success(f"✅ Updated {sheet_to_edit}! Filter value saved as: {filter_val}")
+                    st.rerun()
+
+            with col_reset:
+                if sheet_to_edit in DEFAULT_SHEETS:
+                    if st.button("🔄 Reset to Default", use_container_width=True):
+                        st.session_state['sheet_templates'][sheet_to_edit] = copy.deepcopy(DEFAULT_SHEETS[sheet_to_edit])
+                        save_sheet_templates(st.session_state['sheet_templates'])
+                        st.success(f"✅ {sheet_to_edit} reset to code default!")
+                        st.rerun()
 
     with col_view:
         st.markdown("### Current Templates")
 
         for name, config in st.session_state['sheet_templates'].items():
             status = "✅" if config.get('enabled', True) else "❌"
-            st.write(f"{status} **{name}**")
+            st.write(f"{status} **{name}** — {config.get('description', '')}")
 
-            # Show full rule details for the template
-            filter_type = config.get('filter_type', 'none')
-            filter_value = config.get('filter_value', '')
-            if isinstance(filter_value, list):
-                filter_value_display = ', '.join(str(v) for v in filter_value)
-            else:
-                filter_value_display = str(filter_value)
+            for _line in describe_template_rule(config):
+                st.markdown(f"- {_line}")
 
-            st.caption(f"Filter: {filter_type} | Value: {filter_value_display} | Cols: {config.get('columns', 13)}")
-            st.write(f"Description: {config.get('description', '')} | Group by: {config.get('group_by', 'Line')} | Has subtotals: {config.get('has_subtotals', False)}")
+            with st.expander("Raw technical config"):
+                filter_value = config.get('filter_value', '')
+                filter_value_display = ', '.join(str(v) for v in filter_value) if isinstance(filter_value, list) else str(filter_value)
+                st.caption(f"Filter: {config.get('filter_type', 'none')} | Value: {filter_value_display} | Cols: {config.get('columns', 13)} | Group by: {config.get('group_by', 'Line')}")
 
             # Provide quick-edit button that jumps to the Edit Sheet selector
             if st.button(f"Edit {name}", key=f"edit_btn_{name}"):
