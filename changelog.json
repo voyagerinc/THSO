@@ -1,5 +1,13 @@
 [
   {
+    "timestamp": "2026-08-14T13:32:16.002534",
+    "type": "git_pull_restart",
+    "description": "Git pull + Streamlit restart",
+    "details": "Full deployment",
+    "version": "v5.1.0.1",
+    "user": "system"
+  },
+  {
     "timestamp": "2026-06-26T07:08:57.895791",
     "type": "git_push",
     "description": "Pushed to GitHub: Update from Excel Exporter",
